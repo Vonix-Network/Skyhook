@@ -7,7 +7,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/Vonix-Network/Skyhook/ci.yml?branch=main&style=flat-square)](https://github.com/Vonix-Network/Skyhook/actions)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24C8DB?style=flat-square)](https://tauri.app)
 
-**Status:** v0.3.0 — production-ready. SFTP, integrated SSH terminal, file editor, transfer queue with live throughput, connection import/export, polished UI. Mount-as-drive and watch-and-sync on the v1.0 roadmap.
+**Status:** v0.6.0 — production-ready remote ops + **integrated AI agent**. SFTP, SSH terminal, Monaco editor, transfer queue, plus a Claude/GPT agent that drives the live SSH+SFTP session with approval gating and prompt caching. Mount-as-drive and watch-and-sync on the v1.0 roadmap.
 
 ## Why another SFTP client
 
@@ -29,7 +29,18 @@ Grab the latest from the [Releases page](https://github.com/Vonix-Network/Skyhoo
 
 ## Features
 
-### Shipped (v0.3.0)
+### Shipped (v0.6.0)
+
+**🤖 AI Agent (new in 0.6.0)**
+- Integrated AI agent that drives the live SSH+SFTP session.
+- Anthropic Claude (Messages API) and OpenAI (Chat Completions) — bring-your-own-key, stored in OS keyring.
+- Tools wired straight to `SessionHandle`: list/read/walk/stat, write/mkdir/remove/rename, upload/download, `shell_exec` (ephemeral PTY).
+- **Approval gating** with three modes per connection (Manual / Auto-read / YOLO).
+- **Monaco inline diff** previews for proposed file writes — see exactly what changes before approving.
+- **Prompt caching**: Anthropic 4-breakpoint strategy + OpenAI `prompt_cache_key` for ~75% input-token savings on long conversations.
+- Real-time streaming with token usage reporting (input / output / cache-read / cache-creation).
+- Extended thinking support (Sonnet 4.5+).
+- Per-connection conversation history persisted to disk.
 
 **Connections & sessions**
 - 🔑 Encrypted connection vault — AES-256-GCM + Argon2id, master key in the OS keyring (Keychain / GNOME Keyring / Windows Credential Manager).

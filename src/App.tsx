@@ -12,6 +12,8 @@ import { KnownHostsManager } from "./components/KnownHostsManager";
 import { Shortcuts } from "./components/Shortcuts";
 import { Properties } from "./components/Properties";
 import { Resizer } from "./components/Resizer";
+import { AgentPanel } from "./components/Agent/AgentPanel";
+import { AgentSettings } from "./components/Agent/AgentSettings";
 import { useStore } from "./lib/store";
 import "./styles/app.css";
 
@@ -33,6 +35,10 @@ export function App() {
   const showAbout = useStore((s) => s.showAbout);
   const showKnownHosts = useStore((s) => s.showKnownHosts);
   const showShortcuts = useStore((s) => s.showShortcuts);
+  const showAgent = useStore((s) => s.showAgent);
+  const showAgentSettings = useStore((s) => s.showAgentSettings);
+  const openAgentSettings = useStore((s) => s.openAgentSettings);
+  const closeAgentSettings = useStore((s) => s.closeAgentSettings);
 
   const sidebarWidth = useStore((s) => s.sidebarWidth);
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed);
@@ -103,6 +109,13 @@ export function App() {
     }
   }, [connections, openConnection]);
 
+  // Listen for skyhook:open-agent-settings dispatched from AgentPanel.
+  useEffect(() => {
+    const onOpen = () => openAgentSettings();
+    window.addEventListener("skyhook:open-agent-settings", onOpen as EventListener);
+    return () => window.removeEventListener("skyhook:open-agent-settings", onOpen as EventListener);
+  }, [openAgentSettings]);
+
   // Global '?' → Shortcuts modal.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -165,11 +178,13 @@ export function App() {
           </div>
         )}
       </main>
+      {showAgent && <AgentPanel />}
       {showForm && <ConnectionForm />}
       {showSettings && <Settings />}
       {showAbout && <About />}
       {showKnownHosts && <KnownHostsManager />}
       {showShortcuts && <Shortcuts />}
+      {showAgentSettings && <AgentSettings onClose={closeAgentSettings} />}
       <Properties />
       <ToastContainer />
     </div>

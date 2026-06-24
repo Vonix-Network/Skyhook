@@ -19,6 +19,7 @@ import {
   Copy,
   Info,
   Terminal as TerminalIcon,
+  Bot,
 } from "lucide-react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -93,6 +94,8 @@ export function Browser({ tab }: { tab: Tab }) {
     | undefined;
   const showHidden = settings?.show_hidden_files ?? false;
   const confirmOnDelete = settings?.confirm_on_delete ?? true;
+  const showAgent = useStore((s) => s.showAgent);
+  const toggleAgent = useStore((s) => s.toggleAgent);
 
   const [pathInput, setPathInput] = useState(tab.cwd);
   const pathRef = useRef<HTMLInputElement>(null);
@@ -686,6 +689,13 @@ export function Browser({ tab }: { tab: Tab }) {
           title="Open SSH shell"
         >
           <TerminalIcon size={14} /> Terminal
+        </button>
+        <button
+          className={"btn" + (showAgent ? " btn-primary" : "")}
+          onClick={() => toggleAgent()}
+          title="Toggle Agent panel"
+        >
+          <Bot size={14} /> Agent
         </button>
         <button
           className="btn btn-danger"

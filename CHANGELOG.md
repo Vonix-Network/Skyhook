@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] – 2026-06-24
+
+### Added
+
+#### Integrated AI agent (headline feature)
+Skyhook now ships with a first-class AI agent that drives the existing SFTP +
+SSH primitives. The agent lives in a right-docked panel and can read, write,
+upload, download, and execute on the connected remote server.
+
+- **Providers**: Anthropic Claude (Messages API) and OpenAI (Chat Completions),
+  selectable per conversation.
+- **Prompt caching**: Anthropic uses a 4-breakpoint strategy (system block +
+  last tool def + earliest user turn when conv ≥ 4 messages + last message)
+  for ~75% input-token savings on long conversations. OpenAI uses
+  `prompt_cache_key` over the static prefix.
+- **Tools** (route through `SessionHandle`, so they hit the live SSH+SFTP
+  session): `sftp_list_dir`, `sftp_read_file`, `sftp_stat`, `sftp_walk`,
+  `sftp_write_file`, `sftp_make_dir`, `sftp_remove`, `sftp_rename`,
+  `sftp_download`, `sftp_upload`, `shell_exec` (ephemeral PTY with exit-
+  code sentinel), `task_complete`.
+- **Approval modes** per connection: Manual (every write/exec confirmed),
+  Auto-read (reads free, writes confirmed; the default), Yolo (everything
+  flows; requires typed `YOLO` confirmation to enable).
+- **Streaming UI**: real-time text/thinking deltas, tool-call cards with
+  collapsible args + output, ApprovalCard with **Monaco inline diff** for
+  `sftp_write_file` (fetches current remote contents and diffs against the
+  proposed new content).
+- **Conversations**: persistent per connection at
+  `<config>/skyhook/agent/<connection_id>/<conversation_id>.json`, list +
+  rename + delete + new from the sidebar.
+- **Token usage** (input / output / cache-read / cache-creation) shown
+  after each turn.
+- **Extended thinking** support for Sonnet 4.5+ when enabled.
+- **Cancel-in-flight** turn via the panel header.
+
+#### Backend infrastructure
+- `src/agent/` module: `Provider` trait, `AnthropicProvider`, `OpenAIProvider`,
+  `Keystore` (OS keyring, service `skyhook`, entry `agent-key-<provider>`),
+  `Tools` enum + JSON-Schema, `ApprovalGate` (oneshot-per-call), `ConversationStore`
+  (atomic JSON writes), `AgentRunner` (streaming/tool loop), `AgentRuntime`
+  (Tauri-managed state).
+- 15 new Tauri commands: `agent_list_models`, `agent_*_conversation` (5),
+  `agent_send_message`, `agent_cancel`, `agent_approve_tool`,
+  `agent_reject_tool`, `agent_*_api_key` (3), `agent_get_settings`,
+  `agent_save_settings`.
+- 7 new events: `agent-message-delta`, `agent-thinking-delta`,
+  `agent-tool-call`, `agent-tool-approval`, `agent-tool-result`,
+  `agent-turn-end`, `agent-error`.
+
+#### Frontend
+- `lib/agent-store.ts` (Zustand) holding active conversation, streaming
+  buffers, pending approval, usage.
+- `components/Agent/`: `AgentPanel`, `MessageList`, `Message`, `Composer`,
+  `ConversationList`, `AgentSettings`, `ToolCallCard`, `ApprovalCard`,
+  `DiffPreview`.
+- Sidebar gains a per-connection approval-mode override (Shield icon →
+  Default / Manual / Auto-read / Yolo, persisted in localStorage).
+- Settings modal adds an "Agent" section that opens the Agent Settings
+  modal (API keys, default provider, model dropdowns, max turns, default
+  approval mode, reasoning effort for o-series, show-thinking toggle).
+- Browser toolbar gains a "Bot" toggle button for the Agent panel.
+
+### Changed
+- New deps: `reqwest 0.12` (rustls-tls + json + stream),
+  `eventsource-stream 0.2`, `futures-util 0.3`.
+- AppState gains `agent: Arc<AgentRuntime>`.
+
+### Migration notes
+- API keys stored in the OS keyring under service `skyhook`, entry
+  `agent-key-anthropic` / `agent-key-openai`. Never written to disk in
+  plaintext.
+- Conversation history lives at `<config>/skyhook/agent/` and is
+  per-connection.
+
 ## [0.3.0] – 2026-06-24
 
 ### Added
@@ -189,7 +263,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only. Gated the SSH-agent auth branch behind `#[cfg(unix)]` and returned a
   clear error on Windows.
 
-[Unreleased]: https://github.com/Vonix-Network/Skyhook/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Vonix-Network/Skyhook/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Vonix-Network/Skyhook/compare/v0.3.0...v0.6.0
 [0.3.0]: https://github.com/Vonix-Network/Skyhook/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Vonix-Network/Skyhook/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Vonix-Network/Skyhook/compare/v0.1.0...v0.1.1

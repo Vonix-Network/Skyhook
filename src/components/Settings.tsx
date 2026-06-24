@@ -5,6 +5,7 @@ export function Settings() {
   const settings = useStore((s) => s.settings);
   const update = useStore((s) => s.updateSettings);
   const close = useStore((s) => s.closeSettings);
+  const openAgentSettings = useStore((s) => s.openAgentSettings);
 
   if (!settings) {
     return (
@@ -129,6 +130,28 @@ export function Settings() {
                 checked={settings.editor_word_wrap}
                 onChange={(e) => update({ editor_word_wrap: e.target.checked })}
               />
+            </div>
+          </div>
+
+          {/* Agent */}
+          <div className="settings-section">
+            <div className="settings-section-title">Agent</div>
+            <div className="settings-row">
+              <div>
+                <div className="label">Agent settings</div>
+                <div className="desc">
+                  API keys, default provider &amp; model, approval mode, reasoning effort.
+                </div>
+              </div>
+              <button
+                className="btn btn-secondary"
+                onClick={() => {
+                  close();
+                  openAgentSettings();
+                }}
+              >
+                Open Agent Settings
+              </button>
             </div>
           </div>
         </div>

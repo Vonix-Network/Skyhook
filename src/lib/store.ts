@@ -90,11 +90,16 @@ interface AppStore {
   showSettings: boolean;
   showAbout: boolean;
   showKnownHosts: boolean;
+  showAgentSettings: boolean;
 
   // ---------- v0.3.0 polish ----------
   showShortcuts: boolean;
   sidebarWidth: number;
   transferPanelHeight: number;
+
+  // ---------- v0.6.0 agent ----------
+  showAgent: boolean;
+  toggleAgent: () => void;
 
   loadConnections: () => Promise<void>;
   saveConnection: (c: Connection) => Promise<void>;
@@ -130,6 +135,8 @@ interface AppStore {
   closeAbout: () => void;
   openKnownHosts: () => void;
   closeKnownHosts: () => void;
+  openAgentSettings: () => void;
+  closeAgentSettings: () => void;
   subscribeBackendEvents: () => Promise<() => void>;
 
   // ---------- v0.3.0 polish actions ----------
@@ -155,10 +162,14 @@ export const useStore = create<AppStore>((set, get) => ({
   showSettings: false,
   showAbout: false,
   showKnownHosts: false,
+  showAgentSettings: false,
 
   showShortcuts: false,
   sidebarWidth: 260,
   transferPanelHeight: 240,
+
+  showAgent: false,
+  toggleAgent: () => set({ showAgent: !get().showAgent }),
 
   async loadConnections() {
     const connections = await api.listConnections();
@@ -475,6 +486,12 @@ export const useStore = create<AppStore>((set, get) => ({
   },
   closeKnownHosts() {
     set({ showKnownHosts: false });
+  },
+  openAgentSettings() {
+    set({ showAgentSettings: true });
+  },
+  closeAgentSettings() {
+    set({ showAgentSettings: false });
   },
 
   openShortcuts() {

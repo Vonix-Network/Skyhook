@@ -1,4 +1,5 @@
 import { useStore } from "../lib/store";
+import { useState, useEffect, useRef } from "react";
 import {
   Server,
   Plus,
@@ -10,6 +11,7 @@ import {
   Download,
   Upload as UploadIcon,
   Download as DownloadFileIcon,
+  ShieldCheck,
 } from "lucide-react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -39,6 +41,110 @@ async function writeTextFile(path: string, contents: string): Promise<void> {
     URL.revokeObjectURL(url);
     throw e;
   }
+}
+
+type ApprovalOverride = "default" | "manual" | "auto_read" | "yolo";
+
+function getApprovalOverride(connectionId: string): ApprovalOverride {
+  try {
+    const v = localStorage.getItem(`skyhook.approval.${connectionId}`);
+    if (v === "manual" || v === "auto_read" || v === "yolo") return v;
+  } catch {
+    /* ignore */
+  }
+  return "default";
+}
+
+function setApprovalOverride(connectionId: string, v: ApprovalOverride) {
+  try {
+    if (v === "default") localStorage.removeItem(`skyhook.approval.${connectionId}`);
+    else localStorage.setItem(`skyhook.approval.${connectionId}`, v);
+  } catch {
+    /* ignore */
+  }
+}
+
+function ApprovalModeMenu({ connectionId }: { connectionId: string }) {
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState<ApprovalOverride>(() =>
+    getApprovalOverride(connectionId),
+  );
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const pick = (v: ApprovalOverride) => {
+    if (v === "yolo") {
+      const typed = window.prompt(
+        "Yolo mode auto-approves ALL tool calls.\nType YOLO to confirm:",
+      );
+      if (typed !== "YOLO") {
+        setOpen(false);
+        return;
+      }
+    }
+    setApprovalOverride(connectionId, v);
+    setCurrent(v);
+    setOpen(false);
+  };
+
+  const labelOf = (v: ApprovalOverride) =>
+    v === "default"
+      ? "Default"
+      : v === "manual"
+      ? "Manual"
+      : v === "auto_read"
+      ? "Auto-read"
+      : "Yolo";
+
+  return (
+    <div className="approval-menu-wrap" ref={ref}>
+      <button
+        className={`btn btn-ghost btn-icon ${current !== "default" ? "approval-active" : ""}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        title={`Approval mode: ${labelOf(current)}`}
+      >
+        <ShieldCheck size={13} />
+      </button>
+      {open && (
+        <div
+          className="approval-menu"
+          onClick={(e) => e.stopPropagation()}
+          role="menu"
+        >
+          <div className="approval-menu-title">Approval mode</div>
+          {(["default", "manual", "auto_read", "yolo"] as ApprovalOverride[]).map(
+            (v) => (
+              <button
+                key={v}
+                className={`approval-menu-item ${current === v ? "selected" : ""} ${
+                  v === "yolo" ? "danger" : ""
+                }`}
+                onClick={() => pick(v)}
+                role="menuitemradio"
+                aria-checked={current === v}
+              >
+                {labelOf(v)}
+                {v === "default" && (
+                  <span className="approval-menu-hint">use global</span>
+                )}
+              </button>
+            ),
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function Sidebar() {
@@ -162,6 +268,7 @@ export function Sidebar() {
                 </div>
               </div>
               <div className="conn-actions">
+                <ApprovalModeMenu connectionId={c.id} />
                 <button
                   className="btn btn-ghost btn-icon"
                   onClick={(e) => {
