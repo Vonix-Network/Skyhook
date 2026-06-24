@@ -208,3 +208,56 @@ pub async fn transfer_list(
 ) -> Result<Vec<crate::transfers::Transfer>> {
     Ok(state.transfers.list().await)
 }
+
+// ============================================================
+// Known hosts (TOFU)
+// ============================================================
+
+#[tauri::command]
+pub async fn known_hosts_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::known_hosts::KnownHostEntry>> {
+    let kh = state.known_hosts.lock().await;
+    Ok(kh.list())
+}
+
+#[tauri::command]
+pub async fn known_hosts_remove(
+    state: State<'_, AppState>,
+    host: String,
+    port: u16,
+) -> Result<()> {
+    let mut kh = state.known_hosts.lock().await;
+    kh.remove(&host, port)
+}
+
+#[tauri::command]
+pub async fn known_hosts_trust(
+    state: State<'_, AppState>,
+    host: String,
+    port: u16,
+    algo: String,
+    fingerprint: String,
+) -> Result<()> {
+    let mut kh = state.known_hosts.lock().await;
+    kh.add_raw(&host, port, &algo, &fingerprint)
+}
+
+// ============================================================
+// Settings
+// ============================================================
+
+#[tauri::command]
+pub async fn get_settings(state: State<'_, AppState>) -> Result<crate::settings::Settings> {
+    let s = state.settings.lock().await;
+    Ok(s.get())
+}
+
+#[tauri::command]
+pub async fn save_settings(
+    state: State<'_, AppState>,
+    settings: crate::settings::Settings,
+) -> Result<()> {
+    let mut s = state.settings.lock().await;
+    s.save(settings)
+}

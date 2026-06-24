@@ -1,6 +1,8 @@
 mod commands;
 mod error;
+mod known_hosts;
 mod session;
+mod settings;
 mod sftp;
 pub mod transfers;
 mod vault;
@@ -17,6 +19,10 @@ pub struct AppState {
     pub vault: Arc<Mutex<vault::Vault>>,
     /// Background upload/download engine.
     pub transfers: transfers::TransferEngine,
+    /// Trust-on-first-use known hosts store.
+    pub known_hosts: Arc<Mutex<known_hosts::KnownHosts>>,
+    /// User-facing settings (theme, transfer concurrency, window state).
+    pub settings: Arc<Mutex<settings::SettingsStore>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -30,6 +36,12 @@ pub fn run() {
 
     let vault = Arc::new(Mutex::new(
         vault::Vault::load_or_default().expect("vault load"),
+    ));
+    let known_hosts = Arc::new(Mutex::new(
+        known_hosts::KnownHosts::load().expect("known_hosts load"),
+    ));
+    let settings = Arc::new(Mutex::new(
+        settings::SettingsStore::load().expect("settings load"),
     ));
 
     tauri::Builder::default()
@@ -47,6 +59,8 @@ pub fn run() {
                 sessions,
                 vault: vault.clone(),
                 transfers,
+                known_hosts: known_hosts.clone(),
+                settings: settings.clone(),
             });
             Ok(())
         })
@@ -73,6 +87,11 @@ pub fn run() {
             commands::transfer_resume,
             commands::transfer_cancel,
             commands::transfer_list,
+            commands::known_hosts_list,
+            commands::known_hosts_remove,
+            commands::known_hosts_trust,
+            commands::get_settings,
+            commands::save_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
