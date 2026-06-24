@@ -12,6 +12,7 @@ export interface Tab {
   error: string | null;
   history: string[];
   historyIndex: number;
+  connected: boolean;     // false = backend marked the session dead
 }
 
 export type TransferDirection = "upload" | "download";
@@ -44,6 +45,7 @@ interface AppStore {
   saveConnection: (c: Connection) => Promise<void>;
   deleteConnection: (id: string) => Promise<void>;
   openConnection: (id: string) => Promise<void>;
+  reconnect: (tabId: string) => Promise<void>;
   closeTab: (id: string) => Promise<void>;
   setActiveTab: (id: string) => void;
   navigate: (tabId: string, path: string, pushHistory?: boolean) => Promise<void>;
@@ -89,6 +91,17 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   async openConnection(connectionId) {
+    // Dedup: if a tab already exists for this connection, just focus it.
+    // Prevents accidental stacking of SFTP sessions (Wings/Pterodactyl
+    // caps concurrent SFTP sessions per user and kills the channel when
+    // the limit is exceeded — manifests as "session closed on reload").
+    const existing = get().tabs.find((t) => t.connectionId === connectionId);
+    if (existing) {
+      set({ activeTabId: existing.id });
+      // Refresh in case it was stale
+      await get().refresh(existing.id);
+      return;
+    }
     const status: SessionStatus = await api.connect(connectionId);
     const conn = get().connections.find((c) => c.id === connectionId);
     const tab: Tab = {
@@ -102,9 +115,24 @@ export const useStore = create<AppStore>((set, get) => ({
       error: null,
       history: [status.cwd],
       historyIndex: 0,
+      connected: status.connected,
     };
     set({ tabs: [...get().tabs, tab], activeTabId: tab.id });
     await get().refresh(tab.id);
+  },
+
+  async reconnect(tabId) {
+    const tab = get().tabs.find((t) => t.id === tabId);
+    if (!tab) return;
+    const connectionId = tab.connectionId;
+    // Drop the dead session locally + close the dead one on the backend
+    try {
+      await api.disconnect(tab.id);
+    } catch {
+      /* ignore — it's already dead */
+    }
+    set({ tabs: get().tabs.filter((t) => t.id !== tabId) });
+    await get().openConnection(connectionId);
   },
 
   async closeTab(id) {
@@ -158,10 +186,14 @@ export const useStore = create<AppStore>((set, get) => ({
         ),
       });
     } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      // If the failure mentions a dead channel, mark tab disconnected so
+      // the UI shows the Reconnect banner instead of just a red error.
+      const fatal = /closed|disconnect|broken|eof|not connected|lost/i.test(msg);
       set({
         tabs: get().tabs.map((t) =>
           t.id === tabId
-            ? { ...t, loading: false, error: err?.message ?? String(err) }
+            ? { ...t, loading: false, error: msg, connected: fatal ? false : t.connected }
             : t
         ),
       });

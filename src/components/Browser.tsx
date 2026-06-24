@@ -163,6 +163,17 @@ export function Browser({ tab }: { tab: Tab }) {
 
   return (
     <div className="browser">
+      {!tab.connected && (
+        <div className="reconnect-banner">
+          <span>
+            ⚠ Session closed by server. This can happen if too many SFTP
+            sessions were opened simultaneously.
+          </span>
+          <button className="btn btn-primary" onClick={() => useStore.getState().reconnect(tab.id)}>
+            Reconnect
+          </button>
+        </div>
+      )}
       <div className="toolbar">
         <div className="nav-btns">
           <button

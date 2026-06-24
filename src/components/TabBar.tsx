@@ -17,7 +17,7 @@ export function TabBar() {
           className={`tab ${t.id === activeTabId ? "active" : ""}`}
           onClick={() => setActive(t.id)}
         >
-          <span className="conn-dot online" />
+          <span className={`conn-dot ${t.connected ? "online" : "offline"}`} />
           <span className="tab-title">{t.name}</span>
           <span
             className="tab-close"
