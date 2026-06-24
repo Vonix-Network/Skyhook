@@ -7,7 +7,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/Vonix-Network/Skyhook/ci.yml?branch=main&style=flat-square)](https://github.com/Vonix-Network/Skyhook/actions)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24C8DB?style=flat-square)](https://tauri.app)
 
-**Status:** v0.2.0 — production-ready core. Session management, transfer engine, Monaco editor, polished file browser, known-hosts TOFU, and persistent settings all in. Integrated SSH terminal and mount-as-drive on the v0.3+ roadmap.
+**Status:** v0.3.0 — production-ready. SFTP, integrated SSH terminal, file editor, transfer queue with live throughput, connection import/export, polished UI. Mount-as-drive and watch-and-sync on the v1.0 roadmap.
 
 ## Why another SFTP client
 
@@ -29,7 +29,7 @@ Grab the latest from the [Releases page](https://github.com/Vonix-Network/Skyhoo
 
 ## Features
 
-### Shipped (v0.2.0)
+### Shipped (v0.3.0)
 
 **Connections & sessions**
 - 🔑 Encrypted connection vault — AES-256-GCM + Argon2id, master key in the OS keyring (Keychain / GNOME Keyring / Windows Credential Manager).
@@ -37,6 +37,13 @@ Grab the latest from the [Releases page](https://github.com/Vonix-Network/Skyhoo
 - 🛰️ Multi-session tabs — one click per server, focus dedup so the same connection never opens twice.
 - 🔄 Session state machine — `Connecting → Connected → Degraded → Closed`, with a 30s heartbeat probe and automatic reconnect (1s/2s/5s backoff).
 - 🛡️ Trust-on-first-use known_hosts (SHA-256 fingerprint storage, OpenSSH-compatible format).
+- 📤 Connection import/export as versioned JSON (no secrets — credentials re-entered after import).
+
+**SSH terminal**
+- 💻 Integrated PTY shell per session (xterm.js).
+- 🔀 Multiple concurrent shells per connection on independent SSH channels.
+- 📐 Resize forwarding (SSH WINDOW_CHANGE).
+- 📋 Copy/paste (Ctrl+Shift+C/V on Linux/Win, Cmd+C/V on macOS).
 
 **File browser**
 - 📂 History (back/forward/up), breadcrumb path bar with editable navigation.
@@ -46,35 +53,37 @@ Grab the latest from the [Releases page](https://github.com/Vonix-Network/Skyhoo
 - 🗂️ Sortable columns (Name / Size / Modified / Perms), folders always first.
 - 🙈 Hidden-file toggle.
 - ⌨️ Keyboard-first nav: arrows, Enter, Backspace, Shift/Ctrl+click for multi-select.
+- 🪟 Resizable sidebar + transfer panel.
 
 **Transfers**
 - 📋 Live transfer queue with state events (queued / active / paused / done / cancelled / error).
-- ⏸️ Pause / Resume / Cancel.
+- ⏸️ Pause / Resume / Cancel / Retry per row.
 - 📁 Recursive folder upload + download.
 - 🔢 Configurable concurrency (default 2 in flight).
+- 📊 Live throughput (MB/s) + ETA, with stall detection.
 
 **Editor**
 - ✏️ Inline Monaco editor — same engine as VS Code. Double-click any text file.
 - 🎨 Syntax highlighting auto-detected by extension (JSON, YAML, TOML, properties, INI, shell, JS/TS, Python, Markdown, …).
 - 💾 Ctrl+S / Cmd+S saves back via SFTP. Dirty indicator in the tab.
-- 🚫 10 MB hard cap (don't open multi-GB log files in a browser-engine textarea).
+- 🚫 10 MB hard cap.
 
 **Cross-cutting UI**
 - 🌓 Clean dark UI with a single cyan accent.
-- 🔔 Toast notifications (no more `alert()`).
+- 🔔 Toast notifications.
 - ⚙️ Settings (theme, confirm-on-delete, hidden-file default, transfer concurrency, editor word-wrap), persisted to disk.
 - ℹ️ About dialog with version + GitHub link.
-- 🗃️ Known-hosts manager (review trusted fingerprints, remove entries).
+- 🗃️ Known-hosts manager.
+- ⌨️ Press `?` for the shortcuts overlay.
+- 📐 Window position/size persistence across launches.
+- 🔁 Auto-focus last-used connection on startup.
 
-### Roadmap (v0.3+)
-
-- 🖥️ Integrated SSH terminal tab (xterm.js) — for `tail -f`, `screen -r`, `restart.sh`.
+### Roadmap (v0.4+)
 - 🔍 Recursive remote search.
 - 📐 Side-by-side local/remote dual-pane view.
-- 🪟 Window position/size persistence (state plumbing is in; needs wiring).
+- 🔑 In-app SSH keygen.
 
 ### Roadmap (v1.0)
-
 - 🔌 Mount-as-drive (FUSE / Dokan / macFUSE).
 - 🔁 Watch-and-sync folders.
 - ☁️ Optional cloud-synced bookmarks.

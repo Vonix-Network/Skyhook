@@ -18,12 +18,14 @@ import {
   FileEdit,
   Copy,
   Info,
+  Terminal as TerminalIcon,
 } from "lucide-react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { api, DirEntry } from "../lib/api";
 import { ContextMenu, ContextMenuItem } from "./ContextMenu";
+import { EmptyState } from "./EmptyState";
 
 function fmtSize(n: number) {
   if (n < 1024) return `${n} B`;
@@ -325,17 +327,16 @@ export function Browser({ tab }: { tab: Tab }) {
     }
   }, []);
 
-  const showProperties = useCallback((entry: DirEntry) => {
-    const lines = [
-      `Name: ${entry.name}`,
-      `Path: ${entry.path}`,
-      `Type: ${entry.is_dir ? "Directory" : entry.is_symlink ? "Symlink" : "File"}`,
-      `Size: ${entry.is_dir ? "—" : fmtSize(entry.size)}`,
-      `Modified: ${fmtDate(entry.modified)}`,
-      `Perms: ${fmtMode(entry.mode)}`,
-    ].join("\n");
-    alert(lines);
-  }, []);
+  const showProperties = useCallback(
+    (entry: DirEntry) => {
+      window.dispatchEvent(
+        new CustomEvent("skyhook:show-properties", {
+          detail: { tab: { id: tab.id, name: tab.name }, entry },
+        }),
+      );
+    },
+    [tab.id, tab.name],
+  );
 
   // Row click handlers — replace / additive / shift-range.
   const onRowClick = (ev: React.MouseEvent, entry: DirEntry) => {
@@ -674,6 +675,19 @@ export function Browser({ tab }: { tab: Tab }) {
           <DownloadIcon size={14} /> Download
         </button>
         <button
+          className="btn"
+          onClick={() =>
+            window.dispatchEvent(
+              new CustomEvent("skyhook:open-terminal", {
+                detail: { tabId: tab.id },
+              }),
+            )
+          }
+          title="Open SSH shell"
+        >
+          <TerminalIcon size={14} /> Terminal
+        </button>
+        <button
           className="btn btn-danger"
           onClick={() => doDelete()}
           disabled={localSelected.size === 0}
@@ -717,7 +731,10 @@ export function Browser({ tab }: { tab: Tab }) {
         {tab.loading && <div className="loading-state">Loading…</div>}
         {tab.error && <div className="error-state">Error: {tab.error}</div>}
         {!tab.loading && !tab.error && visibleEntries.length === 0 && (
-          <div className="empty-state">Empty directory</div>
+          <EmptyState
+            title="Empty directory"
+            hint="Drop files here to upload, or right-click for actions."
+          />
         )}
         {!tab.loading &&
           !tab.error &&

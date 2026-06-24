@@ -465,3 +465,28 @@ pub async fn shell_close(
     }
     Ok(())
 }
+
+// ============================================================
+// Local file I/O (for connection import/export, etc.)
+// ============================================================
+
+#[tauri::command]
+pub async fn read_local_text_file(path: String) -> Result<String> {
+    tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| crate::error::SkyhookError::Io(e))
+}
+
+#[tauri::command]
+pub async fn write_local_text_file(path: String, contents: String) -> Result<()> {
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        if !parent.as_os_str().is_empty() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| crate::error::SkyhookError::Io(e))?;
+        }
+    }
+    tokio::fs::write(&path, contents)
+        .await
+        .map_err(|e| crate::error::SkyhookError::Io(e))
+}

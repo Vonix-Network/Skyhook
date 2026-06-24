@@ -8,7 +8,38 @@ import {
   Trash2,
   Pencil,
   Download,
+  Upload as UploadIcon,
+  Download as DownloadFileIcon,
 } from "lucide-react";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
+
+async function readTextFile(path: string): Promise<string> {
+  // Backend exposes a generic file read (used elsewhere for connection JSON).
+  // Use a small Tauri command if available; otherwise fall back to fetch().
+  try {
+    return await invoke<string>("read_local_text_file", { path });
+  } catch {
+    const res = await fetch(`file://${path}`);
+    return await res.text();
+  }
+}
+
+async function writeTextFile(path: string, contents: string): Promise<void> {
+  try {
+    await invoke<void>("write_local_text_file", { path, contents });
+  } catch (e) {
+    // Last-resort: trigger a browser download.
+    const blob = new Blob([contents], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = path.split(/[\\/]/).pop() || "skyhook-connections.json";
+    a.click();
+    URL.revokeObjectURL(url);
+    throw e;
+  }
+}
 
 export function Sidebar() {
   const collapsed = useStore((s) => s.sidebarCollapsed);
@@ -20,9 +51,49 @@ export function Sidebar() {
   const remove = useStore((s) => s.deleteConnection);
   const toggleTransfers = useStore((s) => s.toggleTransfersPanel);
   const transfers = useStore((s) => s.transfers);
+  const loadConnections = useStore((s) => s.loadConnections);
+  const toast = useStore((s) => s.toast);
+  const openSettings = useStore((s) => s.openSettings);
   const activeCount = transfers.filter((t) => t.status === "active" || t.status === "queued").length;
 
   const onlineConnIds = new Set(tabs.map((t) => t.connectionId));
+
+  const doExport = async () => {
+    try {
+      const json = await invoke<string>("export_connections");
+      const target = await saveDialog({
+        defaultPath: "skyhook-connections.json",
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!target) return;
+      await writeTextFile(target, json);
+      toast("Connections exported", "success");
+    } catch (e: any) {
+      toast(`Export failed: ${e?.message ?? e}`, "error");
+    }
+  };
+
+  const doImport = async () => {
+    try {
+      const picked = await openDialog({
+        multiple: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!picked || Array.isArray(picked)) return;
+      const json = await readTextFile(picked as string);
+      const result = await invoke<{ added: number; skipped: number }>(
+        "import_connections",
+        { json },
+      );
+      await loadConnections();
+      toast(
+        `${result.added} added, ${result.skipped} skipped`,
+        "success",
+      );
+    } catch (e: any) {
+      toast(`Import failed: ${e?.message ?? e}`, "error");
+    }
+  };
 
   return (
     <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
@@ -42,13 +113,29 @@ export function Sidebar() {
       <div className="sidebar-section" style={{ flex: 1, overflowY: "auto" }}>
         <div className="sidebar-section-header">
           <span className="label-xs">Connections</span>
-          <button
-            className="btn btn-ghost btn-icon"
-            onClick={() => openForm(null)}
-            title="New connection"
-          >
-            <Plus size={14} />
-          </button>
+          <div style={{ display: "flex", gap: 2, marginLeft: "auto" }}>
+            <button
+              className="btn btn-ghost btn-icon"
+              onClick={doImport}
+              title="Import connections from JSON"
+            >
+              <UploadIcon size={13} />
+            </button>
+            <button
+              className="btn btn-ghost btn-icon"
+              onClick={doExport}
+              title="Export connections to JSON"
+            >
+              <DownloadFileIcon size={13} />
+            </button>
+            <button
+              className="btn btn-ghost btn-icon"
+              onClick={() => openForm(null)}
+              title="New connection"
+            >
+              <Plus size={14} />
+            </button>
+          </div>
         </div>
         <div className="conn-list">
           {connections.length === 0 && !collapsed && (
@@ -126,7 +213,11 @@ export function Sidebar() {
           )}
         </button>
         {!collapsed && (
-          <button className="btn btn-ghost btn-icon" title="Settings (soon)">
+          <button
+            className="btn btn-ghost btn-icon"
+            onClick={openSettings}
+            title="Settings"
+          >
             <Settings2 size={15} />
           </button>
         )}

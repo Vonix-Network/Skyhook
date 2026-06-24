@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] – 2026-06-24
+
+### Added
+
+#### SSH terminal (headline)
+- **Integrated PTY shell** per session (xterm.js + russh PTY channel). Toggle from the Browser toolbar. Cyan-on-dark theme matching the rest of the app.
+- **Multiple shells per connection** — each runs an independent task on its own SSH channel, completely decoupled from the SFTP op queue (terminal input doesn't block file ops and vice-versa).
+- **Resize forwarding** — terminal resize → SSH WINDOW_CHANGE via `request_pty` + `window_change`.
+- **Copy/paste** — Ctrl+Shift+C / Ctrl+Shift+V on Linux/Win, Cmd+C / Cmd+V on macOS.
+- **Exit-code rendering** — `[Process exited with code N]` printed at end-of-session.
+- **Lifecycle**: shells force-close cleanly when the parent session goes Degraded or Closed (transparent resume across SSH reconnect is intentionally not attempted; users open a fresh shell).
+
+#### Transfer engine + UX
+- **Live throughput** (`throughput_bps`) — EMA-smoothed (α=0.3) bytes/sec, emitted on every progress tick.
+- **ETA** (`eta_seconds`) — `(total - bytes) / throughput`, capped at 99 h.
+- **Stall heartbeat** — when bytes stop moving for 5 s on an active transfer, the engine emits a single progress event with throughput=0 so the UI can render the stall.
+- **Production-grade TransferPanel rewrite**: real progress bars (cyan fill, animated diagonal stripe when active), per-row Pause/Resume/Cancel/Retry/Dismiss, header aggregate (`N active • M queued • K completed`), Clear-completed button, sorted by activity, accessibility (`role=progressbar`, aria-valuenow), empty-state copy.
+
+#### Production polish
+- **Window state persistence** — main window size, position, maximized state save on Resize/Move/CloseRequested with a 500 ms debounce; restored on next launch.
+- **Last-active connection auto-focus** — settings track the most-recently-active connection; on startup the frontend auto-opens it.
+- **Connection import/export** — versioned JSON bundle (`{ version: 1, exported_at, connections: [...] }`) **without secrets**. Each import gets a fresh UUID; duplicate `(host, port, username, name)` rows are skipped. New commands: `export_connections`, `import_connections`.
+- **Resizable sidebar + transfer panel** — drag the gutter, sizes persist to settings.
+- **Properties modal** — right-click → Properties opens a real modal (Type / Path / Size / Modified / Permissions in rwx + octal), replacing the previous `alert()`.
+- **EmptyState component** — illustrated empty-directory message replacing the placeholder text.
+- **Shortcuts overlay** — press `?` from anywhere to see all keyboard shortcuts, grouped by section (Global / Browser / Editor / Terminal / Transfers).
+- **Sidebar import/export buttons** with native file dialogs.
+
+#### Backend infrastructure
+- `read_local_text_file` / `write_local_text_file` Tauri commands for the import/export flow.
+- `save_window_state` command for explicit save-before-quit fallbacks.
+- `set_last_active_connection` command writing through to settings.
+
+### Changed
+- `Transfer` struct gains `throughput_bps: f64` and `eta_seconds: Option<u64>`. Frontend types updated accordingly.
+- `subscribeBackendEvents` pipes throughput/ETA into the store.
+- Sidebar settings cog now opens the Settings modal (was a no-op).
+
+### Fixed
+- `save_window_state` was implemented but missing from `invoke_handler` in the wave-1 backend; wired in the integration step so the command actually works.
+
+### Migration notes
+- No on-disk schema changes; the new `throughput_bps`/`eta_seconds` fields are optional (`serde(default)`) so older snapshots round-trip cleanly.
+
 ## [0.2.0] – 2026-06-24
 
 ### Added
@@ -145,7 +189,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only. Gated the SSH-agent auth branch behind `#[cfg(unix)]` and returned a
   clear error on Windows.
 
-[Unreleased]: https://github.com/Vonix-Network/Skyhook/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Vonix-Network/Skyhook/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Vonix-Network/Skyhook/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Vonix-Network/Skyhook/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Vonix-Network/Skyhook/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Vonix-Network/Skyhook/releases/tag/v0.1.0

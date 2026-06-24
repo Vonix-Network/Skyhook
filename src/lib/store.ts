@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { invoke } from "@tauri-apps/api/core";
 import {
   api,
   Connection,
@@ -12,6 +13,18 @@ import {
   onSessionHeartbeat,
   onTransferProgress,
 } from "./events";
+
+// debounced save_settings caller (single-flight, 400ms tail)
+let _settingsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleSettingsSave(get: () => AppStore) {
+  if (_settingsSaveTimer) clearTimeout(_settingsSaveTimer);
+  _settingsSaveTimer = setTimeout(() => {
+    const s = get().settings;
+    if (s) {
+      api.saveSettings(s).catch((e) => console.error("save_settings", e));
+    }
+  }, 400);
+}
 
 export interface Tab {
   id: string;             // == sessionId
@@ -48,6 +61,8 @@ export interface Transfer {
   status: TransferStatus;
   error: string | null;
   startedAt: number;
+  throughput_bps: number;
+  eta_seconds: number | null;
 }
 
 export type ToastKind = "info" | "success" | "warning" | "error";
@@ -76,6 +91,11 @@ interface AppStore {
   showAbout: boolean;
   showKnownHosts: boolean;
 
+  // ---------- v0.3.0 polish ----------
+  showShortcuts: boolean;
+  sidebarWidth: number;
+  transferPanelHeight: number;
+
   loadConnections: () => Promise<void>;
   saveConnection: (c: Connection) => Promise<void>;
   deleteConnection: (id: string) => Promise<void>;
@@ -94,7 +114,7 @@ interface AppStore {
   openConnectionForm: (c?: Connection | null) => void;
   closeConnectionForm: () => void;
   toggleTransfersPanel: () => void;
-  enqueueTransfer: (t: Omit<Transfer, "id" | "startedAt" | "status" | "bytes" | "error">) => void;
+  enqueueTransfer: (t: Omit<Transfer, "id" | "startedAt" | "status" | "bytes" | "error" | "throughput_bps" | "eta_seconds">) => void;
   updateTransfer: (id: string, patch: Partial<Transfer>) => void;
 
   // ---------- new actions ----------
@@ -111,6 +131,12 @@ interface AppStore {
   openKnownHosts: () => void;
   closeKnownHosts: () => void;
   subscribeBackendEvents: () => Promise<() => void>;
+
+  // ---------- v0.3.0 polish actions ----------
+  openShortcuts: () => void;
+  closeShortcuts: () => void;
+  setSidebarWidth: (w: number) => void;
+  setTransferPanelHeight: (h: number) => void;
 }
 
 export const useStore = create<AppStore>((set, get) => ({
@@ -129,6 +155,10 @@ export const useStore = create<AppStore>((set, get) => ({
   showSettings: false,
   showAbout: false,
   showKnownHosts: false,
+
+  showShortcuts: false,
+  sidebarWidth: 260,
+  transferPanelHeight: 240,
 
   async loadConnections() {
     const connections = await api.listConnections();
@@ -201,6 +231,11 @@ export const useStore = create<AppStore>((set, get) => ({
 
   setActiveTab(id) {
     set({ activeTabId: id });
+    const tab = get().tabs.find((t) => t.id === id);
+    if (tab) {
+      invoke("set_last_active_connection", { connectionId: tab.connectionId })
+        .catch(() => {/* command may not exist yet; ignore */});
+    }
   },
 
   async navigate(tabId, path, pushHistory = true) {
@@ -338,6 +373,8 @@ export const useStore = create<AppStore>((set, get) => ({
           bytes: 0,
           error: null,
           startedAt: Date.now(),
+          throughput_bps: 0,
+          eta_seconds: null,
         },
       ],
     });
@@ -354,7 +391,16 @@ export const useStore = create<AppStore>((set, get) => ({
   async loadSettings() {
     try {
       const settings = await api.getSettings();
-      set({ settings });
+      const patch: Partial<AppStore> = { settings };
+      const sw = (settings as any).sidebar_width;
+      const tph = (settings as any).transfer_panel_height;
+      if (typeof sw === "number" && sw > 0) {
+        patch.sidebarWidth = Math.max(200, Math.min(500, Math.round(sw)));
+      }
+      if (typeof tph === "number" && tph > 0) {
+        patch.transferPanelHeight = Math.max(140, Math.min(600, Math.round(tph)));
+      }
+      set(patch as any);
     } catch (e: any) {
       console.error("loadSettings", e);
     }
@@ -431,6 +477,33 @@ export const useStore = create<AppStore>((set, get) => ({
     set({ showKnownHosts: false });
   },
 
+  openShortcuts() {
+    set({ showShortcuts: true });
+  },
+  closeShortcuts() {
+    set({ showShortcuts: false });
+  },
+  setSidebarWidth(w) {
+    const next = Math.max(200, Math.min(500, Math.round(w)));
+    if (get().sidebarWidth === next) return;
+    set({ sidebarWidth: next });
+    const cur = get().settings;
+    if (cur) {
+      set({ settings: { ...cur, sidebar_width: next } as Settings });
+      scheduleSettingsSave(get);
+    }
+  },
+  setTransferPanelHeight(h) {
+    const next = Math.max(140, Math.min(600, Math.round(h)));
+    if (get().transferPanelHeight === next) return;
+    set({ transferPanelHeight: next });
+    const cur = get().settings;
+    if (cur) {
+      set({ settings: { ...cur, transfer_panel_height: next } as Settings });
+      scheduleSettingsSave(get);
+    }
+  },
+
   async subscribeBackendEvents() {
     const unState = await onSessionStateChanged((e) => {
       const connected = e.state !== "closed";
@@ -453,7 +526,7 @@ export const useStore = create<AppStore>((set, get) => ({
     const unBeat = await onSessionHeartbeat(() => {
       /* reserved for future UI; ignore for now */
     });
-    const unProg = await onTransferProgress((e) => {
+    const unProg = await onTransferProgress((e: any) => {
       set({
         transfers: get().transfers.map((t) =>
           t.id === e.id
@@ -462,6 +535,10 @@ export const useStore = create<AppStore>((set, get) => ({
                 bytes: e.bytes,
                 total: e.total,
                 status: e.status as TransferStatus,
+                throughput_bps:
+                  typeof e.throughput_bps === "number" ? e.throughput_bps : 0,
+                eta_seconds:
+                  typeof e.eta_seconds === "number" ? e.eta_seconds : null,
               }
             : t,
         ),

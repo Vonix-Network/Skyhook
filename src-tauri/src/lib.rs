@@ -182,6 +182,8 @@ pub fn run() {
             commands::export_connections,
             commands::import_connections,
             commands::save_window_state,
+            commands::read_local_text_file,
+            commands::write_local_text_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
