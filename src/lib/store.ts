@@ -1,5 +1,17 @@
 import { create } from "zustand";
-import { api, Connection, DirEntry, SessionStatus } from "./api";
+import {
+  api,
+  Connection,
+  DirEntry,
+  SessionStatus,
+  Settings,
+  KnownHostEntry,
+} from "./api";
+import {
+  onSessionStateChanged,
+  onSessionHeartbeat,
+  onTransferProgress,
+} from "./events";
 
 export interface Tab {
   id: string;             // == sessionId
@@ -13,10 +25,17 @@ export interface Tab {
   history: string[];
   historyIndex: number;
   connected: boolean;     // false = backend marked the session dead
+  state: "connecting" | "connected" | "degraded" | "closed";
 }
 
 export type TransferDirection = "upload" | "download";
-export type TransferStatus = "queued" | "active" | "done" | "error";
+export type TransferStatus =
+  | "queued"
+  | "active"
+  | "paused"
+  | "done"
+  | "cancelled"
+  | "error";
 
 export interface Transfer {
   id: string;
@@ -31,7 +50,15 @@ export interface Transfer {
   startedAt: number;
 }
 
+export type ToastKind = "info" | "success" | "warning" | "error";
+export interface Toast {
+  id: string;
+  message: string;
+  kind: ToastKind;
+}
+
 interface AppStore {
+  // ---------- existing ----------
   connections: Connection[];
   tabs: Tab[];
   activeTabId: string | null;
@@ -40,6 +67,14 @@ interface AppStore {
   showConnectionForm: boolean;
   editingConnection: Connection | null;
   showTransfersPanel: boolean;
+
+  // ---------- new ----------
+  settings: Settings | null;
+  knownHosts: KnownHostEntry[];
+  toasts: Toast[];
+  showSettings: boolean;
+  showAbout: boolean;
+  showKnownHosts: boolean;
 
   loadConnections: () => Promise<void>;
   saveConnection: (c: Connection) => Promise<void>;
@@ -61,6 +96,21 @@ interface AppStore {
   toggleTransfersPanel: () => void;
   enqueueTransfer: (t: Omit<Transfer, "id" | "startedAt" | "status" | "bytes" | "error">) => void;
   updateTransfer: (id: string, patch: Partial<Transfer>) => void;
+
+  // ---------- new actions ----------
+  loadSettings: () => Promise<void>;
+  updateSettings: (patch: Partial<Settings>) => Promise<void>;
+  loadKnownHosts: () => Promise<void>;
+  removeKnownHost: (host: string, port: number) => Promise<void>;
+  toast: (message: string, kind?: ToastKind) => string;
+  dismissToast: (id: string) => void;
+  openSettings: () => void;
+  closeSettings: () => void;
+  openAbout: () => void;
+  closeAbout: () => void;
+  openKnownHosts: () => void;
+  closeKnownHosts: () => void;
+  subscribeBackendEvents: () => Promise<() => void>;
 }
 
 export const useStore = create<AppStore>((set, get) => ({
@@ -72,6 +122,13 @@ export const useStore = create<AppStore>((set, get) => ({
   showConnectionForm: false,
   editingConnection: null,
   showTransfersPanel: false,
+
+  settings: null,
+  knownHosts: [],
+  toasts: [],
+  showSettings: false,
+  showAbout: false,
+  showKnownHosts: false,
 
   async loadConnections() {
     const connections = await api.listConnections();
@@ -91,14 +148,9 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   async openConnection(connectionId) {
-    // Dedup: if a tab already exists for this connection, just focus it.
-    // Prevents accidental stacking of SFTP sessions (Wings/Pterodactyl
-    // caps concurrent SFTP sessions per user and kills the channel when
-    // the limit is exceeded — manifests as "session closed on reload").
     const existing = get().tabs.find((t) => t.connectionId === connectionId);
     if (existing) {
       set({ activeTabId: existing.id });
-      // Refresh in case it was stale
       await get().refresh(existing.id);
       return;
     }
@@ -116,6 +168,7 @@ export const useStore = create<AppStore>((set, get) => ({
       history: [status.cwd],
       historyIndex: 0,
       connected: status.connected,
+      state: status.state,
     };
     set({ tabs: [...get().tabs, tab], activeTabId: tab.id });
     await get().refresh(tab.id);
@@ -125,7 +178,6 @@ export const useStore = create<AppStore>((set, get) => ({
     const tab = get().tabs.find((t) => t.id === tabId);
     if (!tab) return;
     const connectionId = tab.connectionId;
-    // Drop the dead session locally + close the dead one on the backend
     try {
       await api.disconnect(tab.id);
     } catch {
@@ -161,7 +213,6 @@ export const useStore = create<AppStore>((set, get) => ({
     });
     try {
       const entries = await api.listDir(tabId, path);
-      // canonicalize cwd from a non-empty result if possible
       const cwd =
         entries.length > 0
           ? entries[0].path.replace(/\/[^/]*$/, "") || "/"
@@ -187,8 +238,6 @@ export const useStore = create<AppStore>((set, get) => ({
       });
     } catch (err: any) {
       const msg = err?.message ?? String(err);
-      // If the failure mentions a dead channel, mark tab disconnected so
-      // the UI shows the Reconnect banner instead of just a red error.
       const fatal = /closed|disconnect|broken|eof|not connected|lost/i.test(msg);
       set({
         tabs: get().tabs.map((t) =>
@@ -298,5 +347,130 @@ export const useStore = create<AppStore>((set, get) => ({
     set({
       transfers: get().transfers.map((t) => (t.id === id ? { ...t, ...patch } : t)),
     });
+  },
+
+  // ====================== NEW ACTIONS ======================
+
+  async loadSettings() {
+    try {
+      const settings = await api.getSettings();
+      set({ settings });
+    } catch (e: any) {
+      console.error("loadSettings", e);
+    }
+  },
+
+  async updateSettings(patch) {
+    const current = get().settings;
+    if (!current) return;
+    const next: Settings = { ...current, ...patch };
+    set({ settings: next });
+    try {
+      await api.saveSettings(next);
+    } catch (e: any) {
+      // roll back on failure
+      set({ settings: current });
+      get().toast(`Failed to save settings: ${e?.message ?? e}`, "error");
+    }
+  },
+
+  async loadKnownHosts() {
+    try {
+      const knownHosts = await api.knownHostsList();
+      set({ knownHosts });
+    } catch (e: any) {
+      console.error("loadKnownHosts", e);
+    }
+  },
+
+  async removeKnownHost(host, port) {
+    try {
+      await api.knownHostsRemove(host, port);
+      set({
+        knownHosts: get().knownHosts.filter(
+          (k) => !(k.host === host && k.port === port),
+        ),
+      });
+      get().toast(`Removed ${host}:${port}`, "success");
+    } catch (e: any) {
+      get().toast(`Failed to remove host: ${e?.message ?? e}`, "error");
+    }
+  },
+
+  toast(message, kind = "info") {
+    const id = crypto.randomUUID();
+    set({ toasts: [...get().toasts, { id, message, kind }] });
+    const lifetime = kind === "error" ? 8000 : 4000;
+    setTimeout(() => {
+      const exists = get().toasts.some((t) => t.id === id);
+      if (exists) get().dismissToast(id);
+    }, lifetime);
+    return id;
+  },
+
+  dismissToast(id) {
+    set({ toasts: get().toasts.filter((t) => t.id !== id) });
+  },
+
+  openSettings() {
+    set({ showSettings: true });
+  },
+  closeSettings() {
+    set({ showSettings: false });
+  },
+  openAbout() {
+    set({ showAbout: true });
+  },
+  closeAbout() {
+    set({ showAbout: false });
+  },
+  openKnownHosts() {
+    set({ showKnownHosts: true });
+  },
+  closeKnownHosts() {
+    set({ showKnownHosts: false });
+  },
+
+  async subscribeBackendEvents() {
+    const unState = await onSessionStateChanged((e) => {
+      const connected = e.state !== "closed";
+      set({
+        tabs: get().tabs.map((t) =>
+          t.id === e.sessionId
+            ? { ...t, state: e.state, connected }
+            : t,
+        ),
+      });
+      if (e.state === "degraded") {
+        get().toast(
+          `Session degraded${e.reason ? `: ${e.reason}` : ""}`,
+          "warning",
+        );
+      } else if (e.state === "closed" && e.reason) {
+        get().toast(`Session closed: ${e.reason}`, "error");
+      }
+    });
+    const unBeat = await onSessionHeartbeat(() => {
+      /* reserved for future UI; ignore for now */
+    });
+    const unProg = await onTransferProgress((e) => {
+      set({
+        transfers: get().transfers.map((t) =>
+          t.id === e.id
+            ? {
+                ...t,
+                bytes: e.bytes,
+                total: e.total,
+                status: e.status as TransferStatus,
+              }
+            : t,
+        ),
+      });
+    });
+    return () => {
+      unState();
+      unBeat();
+      unProg();
+    };
   },
 }));

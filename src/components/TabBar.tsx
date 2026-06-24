@@ -16,11 +16,20 @@ export function TabBar() {
           key={t.id}
           className={`tab ${t.id === activeTabId ? "active" : ""}`}
           onClick={() => setActive(t.id)}
+          onMouseDown={(e) => {
+            // Middle-click closes the tab
+            if (e.button === 1) {
+              e.preventDefault();
+              close(t.id);
+            }
+          }}
+          title={t.name}
         >
           <span className={`conn-dot ${t.connected ? "online" : "offline"}`} />
           <span className="tab-title">{t.name}</span>
           <span
             className="tab-close"
+            title="Close tab"
             onClick={(e) => {
               e.stopPropagation();
               close(t.id);
