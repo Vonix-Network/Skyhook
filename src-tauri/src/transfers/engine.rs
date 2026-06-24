@@ -36,6 +36,10 @@ struct ProgressEvent {
     bytes: u64,
     total: Option<u64>,
     status: TransferStatus,
+    /// Smoothed bytes/sec rate. Zero on stall heartbeats and terminal states.
+    throughput_bps: f64,
+    /// Estimated seconds remaining; `None` when unknown.
+    eta_seconds: Option<u64>,
 }
 
 impl TransferEngine {
@@ -218,6 +222,8 @@ impl TransferEngine {
                 bytes: snap.bytes,
                 total: snap.total,
                 status: snap.status,
+                throughput_bps: snap.throughput_bps,
+                eta_seconds: snap.eta_seconds,
             };
             let _ = app.emit("transfer-progress", payload);
         }
@@ -471,6 +477,13 @@ impl TransferEngine {
         let engine = self.clone();
         tokio::spawn(async move {
             let mut last_emit: u64 = 0;
+            // Anchor the throughput baseline and emit the initial Active snapshot.
+            {
+                let mut jobs = engine.inner.jobs.lock().await;
+                if let Some(j) = jobs.get_mut(&id) {
+                    j.record_throughput_sample(std::time::Instant::now());
+                }
+            }
             if let Some(s) = engine.snapshot(&id).await {
                 engine.emit(&s).await;
             }
@@ -491,21 +504,70 @@ impl TransferEngine {
                 }
                 if matches!(direction, TransferDirection::Download) {
                     let observed = std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
-                    let should_emit = observed != last_emit
-                        && (last_emit == 0
-                            || observed.saturating_sub(last_emit) >= 256 * 1024);
-                    let snap = {
+                    let now = std::time::Instant::now();
+                    let (snap_for_progress, snap_for_stall) = {
                         let mut jobs = engine.inner.jobs.lock().await;
-                        jobs.get_mut(&id).map(|j| {
+                        if let Some(j) = jobs.get_mut(&id) {
                             j.bytes = observed;
-                            j.snapshot()
+                            let should_emit = observed != last_emit
+                                && (last_emit == 0
+                                    || observed.saturating_sub(last_emit) >= 256 * 1024);
+                            if should_emit {
+                                j.record_throughput_sample(now);
+                                last_emit = observed;
+                                (Some(j.snapshot()), None)
+                            } else {
+                                // Stall heartbeat: no movement for >=5s and still
+                                // sitting on Active. Decay throughput to zero,
+                                // re-anchor, and emit one heartbeat so the
+                                // frontend can render the stall.
+                                let stalled = j.is_stalled_since_last_sample()
+                                    && j
+                                        .time_since_last_sample(now)
+                                        .map(|d| d.as_secs() >= 5)
+                                        .unwrap_or(false);
+                                if stalled {
+                                    j.throughput_bps = 0.0;
+                                    j.last_sample_at = Some(now);
+                                    j.last_sample_bytes = j.bytes;
+                                    (None, Some(j.snapshot()))
+                                } else {
+                                    (None, None)
+                                }
+                            }
+                        } else {
+                            (None, None)
+                        }
+                    };
+                    if let Some(s) = snap_for_progress {
+                        engine.emit(&s).await;
+                    } else if let Some(s) = snap_for_stall {
+                        engine.emit(&s).await;
+                    }
+                } else {
+                    // Upload has no mid-flight progress source, but we still
+                    // want to surface stalls so the UI can warn the user.
+                    let now = std::time::Instant::now();
+                    let snap_for_stall = {
+                        let mut jobs = engine.inner.jobs.lock().await;
+                        jobs.get_mut(&id).and_then(|j| {
+                            let stalled = j.is_stalled_since_last_sample()
+                                && j
+                                    .time_since_last_sample(now)
+                                    .map(|d| d.as_secs() >= 5)
+                                    .unwrap_or(false);
+                            if stalled {
+                                j.throughput_bps = 0.0;
+                                j.last_sample_at = Some(now);
+                                j.last_sample_bytes = j.bytes;
+                                Some(j.snapshot())
+                            } else {
+                                None
+                            }
                         })
                     };
-                    if should_emit {
-                        last_emit = observed;
-                        if let Some(s) = snap {
-                            engine.emit(&s).await;
-                        }
+                    if let Some(s) = snap_for_stall {
+                        engine.emit(&s).await;
                     }
                 }
             }

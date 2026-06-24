@@ -261,3 +261,207 @@ pub async fn save_settings(
     let mut s = state.settings.lock().await;
     s.save(settings)
 }
+
+// ============================================================
+// Window state / last-active connection (v0.3.0)
+// ============================================================
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowStateInput {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub x: Option<i32>,
+    pub y: Option<i32>,
+    #[serde(default)]
+    pub maximized: bool,
+}
+
+#[tauri::command]
+pub async fn save_window_state(
+    state: State<'_, AppState>,
+    window: WindowStateInput,
+) -> Result<()> {
+    let mut s = state.settings.lock().await;
+    let mut cur = s.get();
+    cur.window = crate::settings::WindowState {
+        width: window.width,
+        height: window.height,
+        x: window.x,
+        y: window.y,
+        maximized: window.maximized,
+    };
+    s.save(cur)
+}
+
+#[tauri::command]
+pub async fn set_last_active_connection(
+    state: State<'_, AppState>,
+    connection_id: Option<String>,
+) -> Result<()> {
+    let mut s = state.settings.lock().await;
+    let mut cur = s.get();
+    cur.last_active_connection_id = connection_id;
+    s.save(cur)
+}
+
+// ============================================================
+// Connection import/export (no secrets)
+// ============================================================
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ExportAuthKind {
+    Password,
+    Key,
+    Agent,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ExportConnection {
+    name: String,
+    host: String,
+    port: u16,
+    username: String,
+    default_path: Option<String>,
+    color: Option<String>,
+    auth_kind: ExportAuthKind,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ExportBundle {
+    version: u32,
+    exported_at: String,
+    connections: Vec<ExportConnection>,
+}
+
+#[tauri::command]
+pub async fn export_connections(state: State<'_, AppState>) -> Result<String> {
+    let vault = state.vault.lock().await;
+    let connections: Vec<ExportConnection> = vault
+        .list()
+        .into_iter()
+        .map(|c| ExportConnection {
+            name: c.name,
+            host: c.host,
+            port: c.port,
+            username: c.username,
+            default_path: c.default_path,
+            color: c.color,
+            auth_kind: match c.auth {
+                crate::vault::AuthMethod::Password { .. } => ExportAuthKind::Password,
+                crate::vault::AuthMethod::Key { .. } => ExportAuthKind::Key,
+                crate::vault::AuthMethod::Agent => ExportAuthKind::Agent,
+            },
+        })
+        .collect();
+    let bundle = ExportBundle {
+        version: 1,
+        exported_at: chrono::Utc::now().to_rfc3339(),
+        connections,
+    };
+    serde_json::to_string_pretty(&bundle)
+        .map_err(|e| crate::error::SkyhookError::Other(format!("export serialize: {e}")))
+}
+
+#[derive(serde::Serialize)]
+pub struct ImportResult {
+    pub added: u32,
+    pub skipped: u32,
+}
+
+#[tauri::command]
+pub async fn import_connections(
+    state: State<'_, AppState>,
+    json: String,
+) -> Result<ImportResult> {
+    let bundle: ExportBundle = serde_json::from_str(&json)
+        .map_err(|e| crate::error::SkyhookError::Other(format!("invalid bundle: {e}")))?;
+    if bundle.version != 1 {
+        return Err(crate::error::SkyhookError::Other(format!(
+            "unsupported bundle version: {}",
+            bundle.version
+        )));
+    }
+    let mut vault = state.vault.lock().await;
+    let existing: Vec<(String, u16, String, String)> = vault
+        .list()
+        .into_iter()
+        .map(|c| (c.host, c.port, c.username, c.name))
+        .collect();
+    let mut added: u32 = 0;
+    let mut skipped: u32 = 0;
+    for ec in bundle.connections {
+        let key = (ec.host.clone(), ec.port, ec.username.clone(), ec.name.clone());
+        if existing.iter().any(|e| e == &key) {
+            skipped += 1;
+            continue;
+        }
+        let auth = match ec.auth_kind {
+            ExportAuthKind::Agent => crate::vault::AuthMethod::Agent,
+            ExportAuthKind::Key => crate::vault::AuthMethod::Key {
+                private_key: String::new(),
+                passphrase: None,
+            },
+            ExportAuthKind::Password => crate::vault::AuthMethod::Password {
+                password: String::new(),
+            },
+        };
+        let mut conn = crate::vault::Connection::new(
+            ec.name, ec.host, ec.port, ec.username, auth,
+        );
+        conn.default_path = ec.default_path;
+        conn.color = ec.color;
+        vault.upsert(conn)?;
+        added += 1;
+    }
+    Ok(ImportResult { added, skipped })
+}
+
+// ============================================================
+// Interactive shell (PTY)
+// ============================================================
+
+#[tauri::command]
+pub async fn shell_open(
+    state: State<'_, AppState>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<crate::session::ShellInfo> {
+    let h = state.sessions.require(&session_id).await?;
+    h.open_shell(cols, rows).await
+}
+
+#[tauri::command]
+pub async fn shell_write(
+    state: State<'_, AppState>,
+    shell_id: String,
+    data: Vec<u8>,
+) -> Result<()> {
+    let h = state.sessions.require_shell(&shell_id).await?;
+    h.write(data).await
+}
+
+#[tauri::command]
+pub async fn shell_resize(
+    state: State<'_, AppState>,
+    shell_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<()> {
+    let h = state.sessions.require_shell(&shell_id).await?;
+    h.resize(cols, rows).await
+}
+
+#[tauri::command]
+pub async fn shell_close(
+    state: State<'_, AppState>,
+    shell_id: String,
+) -> Result<()> {
+    // Idempotent: missing handle means the shell already closed.
+    if let Some(h) = state.sessions.get_shell(&shell_id).await {
+        h.close().await?;
+    }
+    Ok(())
+}

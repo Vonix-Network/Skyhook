@@ -43,6 +43,7 @@ use crate::vault::{AuthMethod, Connection};
 
 use super::heartbeat::{HEARTBEAT_FAIL_THRESHOLD, HEARTBEAT_INTERVAL};
 use super::reconnect::RECONNECT_BACKOFF;
+use super::shell::{self, ShellHandle, ShellInfo, ShellRegistry};
 use super::state::{SessionInfo, SessionState};
 
 const OP_QUEUE_DEPTH: usize = 64;
@@ -62,6 +63,14 @@ pub enum SessionOp {
     Mkdir { path: String, resp: oneshot::Sender<Result<()>> },
     Remove { path: String, resp: oneshot::Sender<Result<()>> },
     Rename { from: String, to: String, resp: oneshot::Sender<Result<()>> },
+    /// Open a new interactive PTY shell channel on this session's transport.
+    /// The actor opens the channel, registers the resulting [`ShellHandle`]
+    /// in the manager's shell registry, and returns a [`ShellInfo`] snapshot.
+    OpenShell {
+        cols: u16,
+        rows: u16,
+        resp: oneshot::Sender<Result<ShellInfo>>,
+    },
     /// Force a reconnect now (user-initiated or recovery from Degraded).
     Reconnect { resp: oneshot::Sender<Result<()>> },
     /// Tear down the SSH transport and exit the actor task.
@@ -158,6 +167,14 @@ impl SessionHandle {
         self.call(|resp| SessionOp::Rename { from, to, resp }).await
     }
 
+    /// Open a new interactive PTY shell on this session. Returns
+    /// [`ShellInfo`] once the channel + pty + shell requests succeed. The
+    /// shell runs in its own task; use the [`SessionManager`]'s shell
+    /// registry (or the returned id) for subsequent write / resize / close.
+    pub async fn open_shell(&self, cols: u16, rows: u16) -> Result<ShellInfo> {
+        self.call(|resp| SessionOp::OpenShell { cols, rows, resp }).await
+    }
+
     /// Trigger an immediate reconnect attempt.
     pub async fn reconnect(&self) -> Result<()> {
         self.call(|resp| SessionOp::Reconnect { resp }).await
@@ -171,7 +188,7 @@ impl SessionHandle {
 
 /// russh client handler. Currently accepts any host key (TOFU known_hosts is
 /// planned for v0.3).
-struct ClientHandler;
+pub struct ClientHandler;
 
 #[async_trait]
 impl client::Handler for ClientHandler {
@@ -195,13 +212,21 @@ pub struct SessionActor {
     info: Arc<RwLock<SessionInfo>>,
     app: AppHandle,
     heartbeat_failures: u8,
+    /// Shared registry of live shells; cloned from the [`SessionManager`].
+    /// Used to spawn new shells and to force-close all shells when the
+    /// parent transport dies.
+    shells: ShellRegistry,
 }
 
 impl SessionActor {
     /// Build an actor + spawn its task. Returns a [`SessionHandle`] immediately;
     /// the actor finishes connecting in the background and emits
     /// `session-state-changed` on every transition.
-    pub fn spawn(app: AppHandle, connection: Connection) -> SessionHandle {
+    pub fn spawn(
+        app: AppHandle,
+        connection: Connection,
+        shells: ShellRegistry,
+    ) -> SessionHandle {
         let id = uuid::Uuid::new_v4().to_string();
         let info = SessionInfo {
             id: id.clone(),
@@ -229,6 +254,7 @@ impl SessionActor {
             info,
             app,
             heartbeat_failures: 0,
+            shells,
         };
 
         tokio::spawn(actor.run(rx));
@@ -406,6 +432,7 @@ impl SessionActor {
         }
 
         // Best-effort cleanup.
+        self.close_all_shells().await;
         if let Some(h) = self.handle.take() {
             let _ = h.disconnect(russh::Disconnect::ByApplication, "bye", "en").await;
         }
@@ -435,6 +462,9 @@ impl SessionActor {
 
     async fn transition_to_degraded(&mut self, reason: String) {
         self.set_state(SessionState::Degraded, Some(reason)).await;
+        // Interactive shells cannot survive transport loss; tear them
+        // down before attempting reconnect.
+        self.close_all_shells().await;
         match self.try_reconnect().await {
             Ok(()) => self.set_state(SessionState::Connected, None).await,
             Err(e) => {
@@ -507,6 +537,11 @@ impl SessionActor {
             }
             SessionOp::Rename { from, to, resp } => {
                 let r = self.do_rename(from, to).await;
+                if let Err(e) = &r { self.check_fatal(e).await; }
+                let _ = resp.send(r);
+            }
+            SessionOp::OpenShell { cols, rows, resp } => {
+                let r = self.do_open_shell(cols, rows).await;
                 if let Err(e) = &r { self.check_fatal(e).await; }
                 let _ = resp.send(r);
             }
@@ -713,5 +748,45 @@ impl SessionActor {
         sftp.rename(from, to)
             .await
             .map_err(|e| SkyhookError::Sftp(e.to_string()))
+    }
+
+    /// Open a new interactive PTY shell, register the resulting
+    /// [`ShellHandle`] in `self.shells`, and return a [`ShellInfo`] snapshot.
+    /// The spawned task drives the channel for the rest of its lifetime.
+    async fn do_open_shell(&mut self, cols: u16, rows: u16) -> Result<ShellInfo> {
+        let ssh = self
+            .handle
+            .as_ref()
+            .ok_or_else(|| SkyhookError::Ssh("ssh transport not open".into()))?;
+        let handle = shell::open_shell(
+            self.app.clone(),
+            ssh,
+            self.id.clone(),
+            cols,
+            rows,
+            self.shells.clone(),
+        )
+        .await?;
+        Ok(ShellInfo {
+            id: handle.id,
+            session_id: handle.session_id,
+        })
+    }
+
+    /// Force-close every shell currently attached to this session. Used
+    /// when the parent transport dies (Degraded / Closed transitions) —
+    /// interactive shells cannot be transparently resumed across a
+    /// reconnect, so the user must open a fresh one.
+    async fn close_all_shells(&self) {
+        let shells: Vec<ShellHandle> = {
+            let g = self.shells.lock().await;
+            g.values()
+                .filter(|h| h.session_id == self.id)
+                .cloned()
+                .collect()
+        };
+        for s in shells {
+            let _ = s.close().await;
+        }
     }
 }

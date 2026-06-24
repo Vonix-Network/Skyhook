@@ -30,6 +30,7 @@
 pub mod actor;
 pub mod heartbeat;
 pub mod reconnect;
+pub mod shell;
 pub mod state;
 
 use std::collections::HashMap;
@@ -42,6 +43,7 @@ use crate::error::{Result, SkyhookError};
 use crate::vault::Connection;
 
 pub use actor::{SessionActor, SessionHandle};
+pub use shell::{ShellHandle, ShellInfo, ShellRegistry};
 pub use state::SessionInfo;
 
 /// Top-level session registry. One per `AppState`.
@@ -51,6 +53,10 @@ pub use state::SessionInfo;
 pub struct SessionManager {
     inner: Mutex<Inner>,
     app: AppHandle,
+    /// Live interactive shells across all sessions. Looked up by shell id
+    /// for `shell_write` / `shell_resize` / `shell_close` commands, so they
+    /// bypass the per-session op queue.
+    shells: ShellRegistry,
 }
 
 struct Inner {
@@ -67,7 +73,27 @@ impl SessionManager {
                 by_connection: HashMap::new(),
             }),
             app,
+            shells: shell::new_registry(),
         }
+    }
+
+    /// Borrow the shared shell registry. Command handlers look up
+    /// [`ShellHandle`]s here to route write / resize / close calls.
+    pub fn shells(&self) -> &ShellRegistry {
+        &self.shells
+    }
+
+    /// Look up a shell by id (across all sessions).
+    pub async fn get_shell(&self, shell_id: &str) -> Option<ShellHandle> {
+        self.shells.lock().await.get(shell_id).cloned()
+    }
+
+    /// Look up a shell, returning [`SkyhookError::SessionNotFound`] when
+    /// missing. Shells use the same not-found error variant for simplicity.
+    pub async fn require_shell(&self, shell_id: &str) -> Result<ShellHandle> {
+        self.get_shell(shell_id)
+            .await
+            .ok_or_else(|| SkyhookError::SessionNotFound(shell_id.into()))
     }
 
     /// Connect (or reuse) a session for `connection`.
@@ -89,7 +115,7 @@ impl SessionManager {
                 g.by_connection.remove(&connection.id);
             }
         }
-        let handle = SessionActor::spawn(self.app.clone(), connection.clone());
+        let handle = SessionActor::spawn(self.app.clone(), connection.clone(), self.shells.clone());
         g.by_session.insert(handle.id.clone(), handle.clone());
         g.by_connection.insert(connection.id, handle.id.clone());
         Ok(handle)

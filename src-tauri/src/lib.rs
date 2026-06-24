@@ -8,7 +8,8 @@ pub mod transfers;
 mod vault;
 
 use std::sync::Arc;
-use tauri::Manager;
+use std::time::Duration;
+use tauri::{LogicalPosition, LogicalSize, Manager, WindowEvent};
 use tokio::sync::Mutex;
 
 /// Application-wide shared state. Held by Tauri via `manage`.
@@ -62,6 +63,87 @@ pub fn run() {
                 known_hosts: known_hosts.clone(),
                 settings: settings.clone(),
             });
+
+            // Restore + persist window state.
+            if let Some(window) = app.get_webview_window("main") {
+                // Apply saved geometry on startup (best-effort; ignore errors).
+                let saved = {
+                    // Block briefly on the settings mutex (uncontested here at startup).
+                    let s = tauri::async_runtime::block_on(settings.lock());
+                    s.get().window
+                };
+                if let (Some(w), Some(h)) = (saved.width, saved.height) {
+                    if w >= 200 && h >= 150 {
+                        let _ = window.set_size(LogicalSize::new(w as f64, h as f64));
+                    }
+                }
+                if let (Some(x), Some(y)) = (saved.x, saved.y) {
+                    let _ = window.set_position(LogicalPosition::new(x as f64, y as f64));
+                }
+                if saved.maximized {
+                    let _ = window.maximize();
+                }
+
+                // Debounced save loop.
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<bool>();
+                let settings_for_save = settings.clone();
+                let window_for_save = window.clone();
+                tauri::async_runtime::spawn(async move {
+                    while let Some(force) = rx.recv().await {
+                        // Coalesce bursts: drain with a debounce window unless forced.
+                        if !force {
+                            let debounce = tokio::time::sleep(Duration::from_millis(500));
+                            tokio::pin!(debounce);
+                            loop {
+                                tokio::select! {
+                                    _ = &mut debounce => break,
+                                    msg = rx.recv() => {
+                                        match msg {
+                                            Some(true) => break, // forced save (close)
+                                            Some(false) => continue,
+                                            None => return,
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        let scale = window_for_save.scale_factor().unwrap_or(1.0);
+                        let size = window_for_save.inner_size().ok();
+                        let pos = window_for_save.outer_position().ok();
+                        let maximized = window_for_save.is_maximized().unwrap_or(false);
+                        let mut store = settings_for_save.lock().await;
+                        let mut cur = store.get();
+                        if !maximized {
+                            if let Some(sz) = size {
+                                let logical = sz.to_logical::<f64>(scale);
+                                cur.window.width = Some(logical.width.round() as u32);
+                                cur.window.height = Some(logical.height.round() as u32);
+                            }
+                            if let Some(p) = pos {
+                                let logical = p.to_logical::<f64>(scale);
+                                cur.window.x = Some(logical.x.round() as i32);
+                                cur.window.y = Some(logical.y.round() as i32);
+                            }
+                        }
+                        cur.window.maximized = maximized;
+                        if let Err(e) = store.save(cur) {
+                            tracing::warn!("window state save failed: {e:?}");
+                        }
+                    }
+                });
+
+                let tx_for_events = tx.clone();
+                window.on_window_event(move |ev| match ev {
+                    WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
+                        let _ = tx_for_events.send(false);
+                    }
+                    WindowEvent::CloseRequested { .. } => {
+                        let _ = tx_for_events.send(true);
+                    }
+                    _ => {}
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -92,6 +174,14 @@ pub fn run() {
             commands::known_hosts_trust,
             commands::get_settings,
             commands::save_settings,
+            commands::shell_open,
+            commands::shell_write,
+            commands::shell_resize,
+            commands::shell_close,
+            commands::set_last_active_connection,
+            commands::export_connections,
+            commands::import_connections,
+            commands::save_window_state,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
