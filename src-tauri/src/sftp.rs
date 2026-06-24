@@ -83,25 +83,34 @@ impl Session {
                     .map_err(|e| SkyhookError::Ssh(format!("auth: {e}")))?
             }
             AuthMethod::Agent => {
-                let mut agent = russh::keys::agent::client::AgentClient::connect_env()
-                    .await
-                    .map_err(|e| SkyhookError::Ssh(format!("agent: {e}")))?;
-                let identities = agent
-                    .request_identities()
-                    .await
-                    .map_err(|e| SkyhookError::Ssh(format!("agent ids: {e}")))?;
-                let mut ok = false;
-                for pubkey in identities {
-                    let (agent_back, res) = handle
-                        .authenticate_future(conn.username.clone(), pubkey, agent)
-                        .await;
-                    agent = agent_back;
-                    if matches!(res, Ok(true)) {
-                        ok = true;
-                        break;
+                #[cfg(unix)]
+                {
+                    let mut agent = russh::keys::agent::client::AgentClient::connect_env()
+                        .await
+                        .map_err(|e| SkyhookError::Ssh(format!("agent: {e}")))?;
+                    let identities = agent
+                        .request_identities()
+                        .await
+                        .map_err(|e| SkyhookError::Ssh(format!("agent ids: {e}")))?;
+                    let mut ok = false;
+                    for pubkey in identities {
+                        let (agent_back, res) = handle
+                            .authenticate_future(conn.username.clone(), pubkey, agent)
+                            .await;
+                        agent = agent_back;
+                        if matches!(res, Ok(true)) {
+                            ok = true;
+                            break;
+                        }
                     }
+                    ok
                 }
-                ok
+                #[cfg(not(unix))]
+                {
+                    return Err(SkyhookError::Ssh(
+                        "SSH agent auth on Windows is not yet supported — use key or password".into(),
+                    ));
+                }
             }
         };
 
