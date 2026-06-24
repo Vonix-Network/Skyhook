@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] – 2026-06-24
+
+### Added
+- **End-to-end SFTP+SSH integration test** (`tests/e2e_local_sshd.rs`) that runs
+  against a real OpenSSH server when `SKYHOOK_E2E_SSHD` is set. Exercises the
+  full SSH-pubkey-auth → SFTP-subsystem → list/mkdir/write/read/stat/remove
+  roundtrip plus a separate exec channel with exit-status capture. Skipped
+  silently when the env var is absent (so CI on Windows/macOS without sshd
+  doesn't fail).
+
+### Fixed
+- **Graceful startup**: vault / known_hosts / settings loaders no longer
+  `expect()` on failure. If `%APPDATA%` (or `$XDG_CONFIG_HOME`) is unwritable,
+  the app now logs the error and falls back to in-memory defaults so the user
+  sees the UI instead of a silent abort. Saves still fail loudly, but at least
+  the app launches.
+
+### Security
+- Documented three open advisories in [#1](https://github.com/Vonix-Network/Skyhook/issues/1):
+  - russh 0.46 → 0.61 bump (RUSTSEC-2026-0153/0154, high, DoS only) — scheduled
+    for v0.7.0 because the API jump spans several breaking releases and needs
+    real SSH testing.
+  - rsa 0.9.10 Marvin timing attack (RUSTSEC-2023-0071, medium) — transitive
+    via russh-keys, no upstream fix available.
+
+### Known issues
+- Monaco editor is loaded from CDN at runtime (offline-broken). Tracked in
+  [#2](https://github.com/Vonix-Network/Skyhook/issues/2), fix in v0.6.3.
+
 ## [0.6.1] – 2026-06-24
 
 ### Fixed

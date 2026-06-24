@@ -38,20 +38,17 @@ const SHELL_EXIT_SENTINEL: &str = "__SKYHOOK_AGENT_EXIT_";
 /// Per the v0.6.0 plan, reads are always free; writes/execs depend on mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ApprovalMode {
     /// Confirm every write and exec.
     Manual,
     /// Reads always allowed; writes/execs confirmed. Default.
+    #[default]
     AutoRead,
     /// Everything goes — no prompts.
     Yolo,
 }
 
-impl Default for ApprovalMode {
-    fn default() -> Self {
-        ApprovalMode::AutoRead
-    }
-}
 
 /// One tool invocation issued by the model.
 ///

@@ -59,6 +59,15 @@ fn config_dir() -> Result<PathBuf> {
 }
 
 impl KnownHosts {
+    /// In-memory fallback when the config dir is unwritable. TOFU additions in
+    /// this session won't persist, but the app still runs.
+    pub fn in_memory_default() -> Self {
+        Self {
+            path: std::path::PathBuf::from("/dev/null"),
+            entries: HashMap::new(),
+        }
+    }
+
     pub fn load() -> Result<Self> {
         let path = config_dir()?.join("known_hosts");
         let mut entries: HashMap<String, KnownHostEntry> = HashMap::new();

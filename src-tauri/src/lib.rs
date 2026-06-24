@@ -38,14 +38,26 @@ pub fn run() {
         )
         .init();
 
+    // Bootstrap state — load with graceful fallback. If config dir is unwritable,
+    // we surface a tracing error and continue with in-memory defaults so the app
+    // still launches and the user can see *something* instead of a silent abort.
     let vault = Arc::new(Mutex::new(
-        vault::Vault::load_or_default().expect("vault load"),
+        vault::Vault::load_or_default().unwrap_or_else(|e| {
+            tracing::error!("vault load failed, starting empty (connections won't persist): {e}");
+            vault::Vault::in_memory_default()
+        }),
     ));
     let known_hosts = Arc::new(Mutex::new(
-        known_hosts::KnownHosts::load().expect("known_hosts load"),
+        known_hosts::KnownHosts::load().unwrap_or_else(|e| {
+            tracing::error!("known_hosts load failed, TOFU will not persist this session: {e}");
+            known_hosts::KnownHosts::in_memory_default()
+        }),
     ));
     let settings = Arc::new(Mutex::new(
-        settings::SettingsStore::load().expect("settings load"),
+        settings::SettingsStore::load().unwrap_or_else(|e| {
+            tracing::error!("settings load failed, using defaults: {e}");
+            settings::SettingsStore::in_memory_default()
+        }),
     ));
 
     tauri::Builder::default()

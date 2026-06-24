@@ -99,6 +99,18 @@ impl Vault {
         Ok(Self { data, path, key })
     }
 
+    /// In-memory fallback used when persistence is unavailable (e.g. read-only
+    /// config dir on Windows). Saves will fail loudly but the app still runs.
+    pub fn in_memory_default() -> Self {
+        let mut k = [0u8; 32];
+        OsRng.fill_bytes(&mut k);
+        Self {
+            data: VaultData::default(),
+            path: std::path::PathBuf::from("/dev/null"),
+            key: k,
+        }
+    }
+
     /// Master key resolution, in priority order:
     ///   1. OS keyring (preferred — Keychain / GNOME Keyring / Win Credential Manager)
     ///   2. `<config>/skyhook/master.key` (b64) — survives keyring backend flakes
@@ -304,7 +316,7 @@ mod base64_lite {
     const T: &[u8; 64] =
         b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     pub fn encode(input: &[u8]) -> String {
-        let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+        let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
         for chunk in input.chunks(3) {
             let b0 = chunk[0];
             let b1 = chunk.get(1).copied().unwrap_or(0);

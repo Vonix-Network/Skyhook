@@ -474,7 +474,7 @@ pub async fn shell_close(
 pub async fn read_local_text_file(path: String) -> Result<String> {
     tokio::fs::read_to_string(&path)
         .await
-        .map_err(|e| crate::error::SkyhookError::Io(e))
+        .map_err(crate::error::SkyhookError::Io)
 }
 
 #[tauri::command]
@@ -483,12 +483,12 @@ pub async fn write_local_text_file(path: String, contents: String) -> Result<()>
         if !parent.as_os_str().is_empty() {
             tokio::fs::create_dir_all(parent)
                 .await
-                .map_err(|e| crate::error::SkyhookError::Io(e))?;
+                .map_err(crate::error::SkyhookError::Io)?;
         }
     }
     tokio::fs::write(&path, contents)
         .await
-        .map_err(|e| crate::error::SkyhookError::Io(e))
+        .map_err(crate::error::SkyhookError::Io)
 }
 
 // ============================================================

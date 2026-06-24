@@ -70,6 +70,14 @@ fn config_dir() -> Result<PathBuf> {
 }
 
 impl SettingsStore {
+    /// In-memory fallback when the config dir is unwritable.
+    pub fn in_memory_default() -> Self {
+        Self {
+            path: std::path::PathBuf::from("/dev/null"),
+            current: Settings::default(),
+        }
+    }
+
     pub fn load() -> Result<Self> {
         let path = config_dir()?.join("settings.json");
         let current = if path.exists() {
