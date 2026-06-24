@@ -4,6 +4,7 @@ mod known_hosts;
 mod session;
 mod settings;
 mod sftp;
+pub mod agent;
 pub mod transfers;
 mod vault;
 
@@ -24,6 +25,8 @@ pub struct AppState {
     pub known_hosts: Arc<Mutex<known_hosts::KnownHosts>>,
     /// User-facing settings (theme, transfer concurrency, window state).
     pub settings: Arc<Mutex<settings::SettingsStore>>,
+    /// Agent service (providers + later runner/history/approval).
+    pub agent: Arc<agent::AgentService>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -62,6 +65,7 @@ pub fn run() {
                 transfers,
                 known_hosts: known_hosts.clone(),
                 settings: settings.clone(),
+                agent: Arc::new(agent::AgentService::new()),
             });
 
             // Restore + persist window state.
@@ -184,6 +188,21 @@ pub fn run() {
             commands::save_window_state,
             commands::read_local_text_file,
             commands::write_local_text_file,
+            commands::agent_list_models,
+            commands::agent_list_conversations,
+            commands::agent_load_conversation,
+            commands::agent_new_conversation,
+            commands::agent_delete_conversation,
+            commands::agent_rename_conversation,
+            commands::agent_send_message,
+            commands::agent_cancel,
+            commands::agent_approve_tool,
+            commands::agent_reject_tool,
+            commands::agent_set_api_key,
+            commands::agent_has_api_key,
+            commands::agent_remove_api_key,
+            commands::agent_get_settings,
+            commands::agent_save_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

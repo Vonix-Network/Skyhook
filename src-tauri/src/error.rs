@@ -21,6 +21,8 @@ pub enum SkyhookError {
     Crypto(String),
     #[error("serde: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("agent: {0}")]
+    Agent(String),
     #[error("{0}")]
     Other(String),
 }
@@ -52,6 +54,7 @@ impl Serialize for SkyhookError {
             SkyhookError::Vault(_) => "vault",
             SkyhookError::Crypto(_) => "crypto",
             SkyhookError::Serde(_) => "serde",
+            SkyhookError::Agent(_) => "agent",
             SkyhookError::Other(_) => "other",
         };
         Wire {
