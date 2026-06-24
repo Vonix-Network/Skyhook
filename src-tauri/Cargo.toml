@@ -2,7 +2,7 @@
 
 [package]
 name = "skyhook"
-version = "0.6.0"
+version = "0.6.1"
 description = "Modern SFTP client"
 edition = "2021"
 rust-version = "1.77"

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] – 2026-06-24
+
+### Fixed
+- **Vault wipe on Windows after relaunch.** The master key was sourced solely
+  from the OS keyring, and any transient read failure (Credential Manager
+  hiccups across signed/unsigned builds, AV interference, UAC context shifts)
+  caused Skyhook to silently generate a *new* master key and treat the
+  existing `vault.bin` as undecryptable — which the loader then masked with
+  `unwrap_or_default()`, dropping every saved connection on the next save.
+- The vault loader now **never** silently resets on decrypt failure. The
+  unreadable blob is quarantined to `vault.bin.corrupt.<timestamp>` so the
+  user can recover or report it, instead of being overwritten empty.
+
+### Changed
+- **Dual-write master key**: the 32-byte vault master key is now stored in
+  *both* the OS keyring and `<config>/skyhook/master.key` (base64, mode 0600
+  on Unix). Loader priority: keyring → on-disk → generate. If either store
+  has a valid key, the other is repaired transparently. This survives Windows
+  Credential Manager flakes that otherwise nuke the vault.
+
 ## [0.6.0] – 2026-06-24
 
 ### Added

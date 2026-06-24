@@ -72,42 +72,107 @@ impl Vault {
     }
 
     pub fn load_or_default() -> Result<Self> {
-        let path = Self::config_dir()?.join("vault.bin");
-        // Master key: stored in OS keyring, generated on first run
-        let key = Self::load_or_create_master_key()?;
+        let dir = Self::config_dir()?;
+        let path = dir.join("vault.bin");
+        let key = Self::load_or_create_master_key(&dir)?;
         let data = if path.exists() {
             let blob = std::fs::read(&path)?;
-            Self::decrypt(&blob, &key).unwrap_or_default()
+            match Self::decrypt(&blob, &key) {
+                Ok(d) => d,
+                Err(e) => {
+                    // CRITICAL: never silently drop the user's connections.
+                    // Quarantine the unreadable blob with a timestamped suffix so the
+                    // user can recover or report it, then start a fresh vault.
+                    let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+                    let quarantine = path.with_file_name(format!("vault.bin.corrupt.{ts}"));
+                    let _ = std::fs::rename(&path, &quarantine);
+                    eprintln!(
+                        "[skyhook] vault decrypt failed ({e}); quarantined to {}",
+                        quarantine.display()
+                    );
+                    VaultData::default()
+                }
+            }
         } else {
             VaultData::default()
         };
         Ok(Self { data, path, key })
     }
 
-    fn load_or_create_master_key() -> Result<[u8; 32]> {
-        let entry = keyring::Entry::new("skyhook", "vault-master")
-            .map_err(|e| SkyhookError::Vault(format!("keyring: {e}")))?;
-        match entry.get_password() {
-            Ok(b64) => {
-                use base64_lite::*;
-                let bytes = decode(&b64).map_err(|_| SkyhookError::Vault("bad key".into()))?;
-                if bytes.len() != 32 {
-                    return Err(SkyhookError::Vault("bad key length".into()));
+    /// Master key resolution, in priority order:
+    ///   1. OS keyring (preferred — Keychain / GNOME Keyring / Win Credential Manager)
+    ///   2. `<config>/skyhook/master.key` (b64) — survives keyring backend flakes
+    ///   3. Generate fresh, write to BOTH
+    ///
+    /// The dual-write is essential on Windows: keyring entries can be lost across
+    /// signed/unsigned build swaps, AV quarantines, or UAC context changes. Without
+    /// the on-disk fallback, a single transient keyring read failure nukes the vault.
+    fn load_or_create_master_key(dir: &std::path::Path) -> Result<[u8; 32]> {
+        let key_file = dir.join("master.key");
+        let entry = keyring::Entry::new("skyhook", "vault-master").ok();
+
+        // 1. Try keyring first
+        if let Some(ref e) = entry {
+            if let Ok(b64) = e.get_password() {
+                if let Ok(bytes) = base64_lite::decode(&b64) {
+                    if bytes.len() == 32 {
+                        let mut k = [0u8; 32];
+                        k.copy_from_slice(&bytes);
+                        // Mirror to disk if the file is missing (first run on this machine
+                        // since the dual-write feature shipped).
+                        if !key_file.exists() {
+                            let _ = Self::write_key_file(&key_file, &b64);
+                        }
+                        return Ok(k);
+                    }
                 }
-                let mut k = [0u8; 32];
-                k.copy_from_slice(&bytes);
-                Ok(k)
-            }
-            Err(_) => {
-                let mut k = [0u8; 32];
-                OsRng.fill_bytes(&mut k);
-                let b64 = base64_lite::encode(&k);
-                entry
-                    .set_password(&b64)
-                    .map_err(|e| SkyhookError::Vault(format!("keyring set: {e}")))?;
-                Ok(k)
             }
         }
+
+        // 2. Fall back to on-disk key
+        if key_file.exists() {
+            let b64 = std::fs::read_to_string(&key_file)
+                .map_err(|e| SkyhookError::Vault(format!("read master.key: {e}")))?;
+            let b64 = b64.trim();
+            if let Ok(bytes) = base64_lite::decode(b64) {
+                if bytes.len() == 32 {
+                    let mut k = [0u8; 32];
+                    k.copy_from_slice(&bytes);
+                    // Try to restore the keyring entry (best-effort).
+                    if let Some(ref e) = entry {
+                        let _ = e.set_password(b64);
+                    }
+                    return Ok(k);
+                }
+            }
+            // Bad on-disk key: don't silently rotate; the user's vault might still be
+            // recoverable. Quarantine and continue to step 3.
+            let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+            let _ = std::fs::rename(&key_file, dir.join(format!("master.key.bad.{ts}")));
+        }
+
+        // 3. Generate fresh and write to both stores
+        let mut k = [0u8; 32];
+        OsRng.fill_bytes(&mut k);
+        let b64 = base64_lite::encode(&k);
+        if let Some(ref e) = entry {
+            let _ = e.set_password(&b64); // best-effort
+        }
+        Self::write_key_file(&key_file, &b64)?;
+        Ok(k)
+    }
+
+    fn write_key_file(path: &std::path::Path, b64: &str) -> Result<()> {
+        let tmp = path.with_extension("key.tmp");
+        std::fs::write(&tmp, b64)?;
+        // Restrict perms where the OS supports it
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        }
+        std::fs::rename(&tmp, path)?;
+        Ok(())
     }
 
     fn encrypt(plaintext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>> {
