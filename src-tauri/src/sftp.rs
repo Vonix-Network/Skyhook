@@ -272,7 +272,7 @@ impl Session {
 
     pub async fn disconnect(&self) -> Result<()> {
         let _ = self.sftp.lock().await;
-        let mut h = self.handle.lock().await;
+        let h = self.handle.lock().await;
         let _ = h
             .disconnect(russh::Disconnect::ByApplication, "bye", "en")
             .await;
