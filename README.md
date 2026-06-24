@@ -1,6 +1,6 @@
 # Skyhook
 
-> A modern, fast SFTP client. Cross-platform desktop app built on Tauri 2 + Rust + React.
+> A modern, fast SFTP + SSH client with a built-in AI agent. Cross-platform desktop app built on Tauri 2 + Rust + React.
 
 [![Release](https://img.shields.io/github/v/release/Vonix-Network/Skyhook?style=flat-square)](https://github.com/Vonix-Network/Skyhook/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
@@ -9,9 +9,11 @@
 
 **Status:** v0.6.0 — production-ready remote ops + **integrated AI agent**. SFTP, SSH terminal, Monaco editor, transfer queue, plus a Claude/GPT agent that drives the live SSH+SFTP session with approval gating and prompt caching. Mount-as-drive and watch-and-sync on the v1.0 roadmap.
 
-## Why another SFTP client
+## Why Skyhook
 
-WinSCP and FileZilla look like Windows 7. Cyberduck is OK but slow. Termius is a subscription. Mountain Duck is closed-source and expensive. There's room for a clean, native-feeling, keyboard-first SFTP client with a real connection vault — that ships as a small native binary and stays out of your way.
+WinSCP and FileZilla look like Windows 7. Cyberduck is OK but slow. Termius is a subscription with no agent. Cursor and Claude Code are agents that only see your *local* filesystem. Mountain Duck is closed-source and expensive.
+
+Skyhook is the first desktop client that combines a real native SFTP browser, an integrated SSH terminal, *and* a first-class AI agent that drives the **live remote session** — read/write/exec on the actual server you're connected to, with diff previews and approval gating. Cursor for live remote codebases.
 
 ## Download
 
@@ -99,16 +101,34 @@ Grab the latest from the [Releases page](https://github.com/Vonix-Network/Skyhoo
 - 🔁 Watch-and-sync folders.
 - ☁️ Optional cloud-synced bookmarks.
 
+## Using the agent
+
+1. Connect to a server.
+2. Open **Settings → Agent**, paste your **Anthropic** and/or **OpenAI** API key (stored in the OS keyring — never on disk).
+3. Pick a default provider + model. Defaults are `claude-sonnet-4-5` and `gpt-4o`.
+4. Click the **🤖 Bot** toggle in the browser toolbar to open the Agent panel.
+5. (Optional) Per connection, click the **Shield** icon in the sidebar to override approval mode: *Manual* (confirm every write/exec), *Auto-read* (reads free, writes confirmed — default), or *Yolo* (full auto, requires typing `YOLO`).
+6. Ask away. Examples:
+   - *"Read `server.properties` and bump `view-distance` to 10."* → agent fetches the file, shows a Monaco inline diff, you approve.
+   - *"Tail the last 200 lines of `/var/log/syslog` and explain any errors."*
+   - *"Walk `/var/www`, find every `.env` file, list which ones have `DEBUG=true`."*
+
+Token usage (input / output / cache-read / cache-creation) is shown after every turn. Long conversations get ~75% input-token savings via Anthropic's prompt caching.
+
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
 │  React + TypeScript UI                              │
-│   • Vite, zustand, Monaco, lucide-react             │
+│   • Vite, zustand, Monaco, xterm.js, lucide-react   │
+│   • Agent panel (streaming, diff preview, approval) │
 ├─────────────────────────────────────────────────────┤
 │  Tauri 2 IPC bridge + event bus                     │
 │   • session-state-changed, transfer-progress,        │
 │     session-heartbeat                               │
+│   • agent-message-delta, agent-tool-call,           │
+│     agent-tool-approval, agent-tool-result,         │
+│     agent-turn-end                                  │
 ├─────────────────────────────────────────────────────┤
 │  Rust core                                          │
 │   • russh — pure-Rust SSH client                    │
@@ -118,8 +138,14 @@ Grab the latest from the [Releases page](https://github.com/Vonix-Network/Skyhoo
 │     ├─ heartbeat (30s)                              │
 │     └─ auto-reconnect with backoff                  │
 │   • Transfer engine (Semaphore-gated concurrency)   │
+│   • Agent runtime                                   │
+│     ├─ Provider trait → Anthropic | OpenAI          │
+│     ├─ Tool dispatcher → SessionHandle              │
+│     ├─ Approval gate (oneshot per call)             │
+│     ├─ Conversation store (atomic JSON per conn)    │
+│     └─ Prompt caching (Anthropic 4-bp, OpenAI key)  │
 │   • aes-gcm + argon2id encrypted vault              │
-│   • keyring — master key in OS keystore             │
+│   • keyring — vault key + agent API keys            │
 │   • OpenSSH-compatible known_hosts                  │
 │   • atomic JSON settings persistence                │
 └─────────────────────────────────────────────────────┘
@@ -162,7 +188,8 @@ pnpm tauri:build
 ### Tests
 
 ```bash
-# Backend unit tests (path normalization, vault crypto, settings round-trip, known_hosts parsing)
+# Backend unit tests (path normalization, vault crypto, settings round-trip,
+# known_hosts parsing, Anthropic SSE event parsing) — 16 tests
 cd src-tauri && cargo test
 
 # Frontend type-check
