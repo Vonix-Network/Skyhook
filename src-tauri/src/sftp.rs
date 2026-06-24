@@ -71,3 +71,61 @@ pub fn is_fatal_channel_error(msg: &str) -> bool {
         || m.contains("not connected")
         || m.contains("eof")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_handles_empty() {
+        assert_eq!(normalize_remote_path(""), "/");
+    }
+
+    #[test]
+    fn normalize_collapses_double_slashes() {
+        // The exact bug from v0.1.0: jail root "/" + "/" + "newfolder" -> "//newfolder"
+        // Wings/Pterodactyl rejects this and kills the channel.
+        assert_eq!(normalize_remote_path("//newfolder"), "/newfolder");
+        assert_eq!(normalize_remote_path("/a//b///c"), "/a/b/c");
+    }
+
+    #[test]
+    fn normalize_strips_trailing_slash_except_root() {
+        assert_eq!(normalize_remote_path("/"), "/");
+        assert_eq!(normalize_remote_path("/foo/"), "/foo");
+        assert_eq!(normalize_remote_path("/foo/bar/"), "/foo/bar");
+    }
+
+    #[test]
+    fn normalize_preserves_clean_paths() {
+        assert_eq!(normalize_remote_path("/home/container"), "/home/container");
+        assert_eq!(normalize_remote_path("relative/path"), "relative/path");
+    }
+
+    #[test]
+    fn join_root_with_name() {
+        // The actual mkdir-at-root case.
+        assert_eq!(join_remote("/", "newfolder"), "/newfolder");
+        assert_eq!(join_remote("/home", "user"), "/home/user");
+        assert_eq!(join_remote("/home/", "user"), "/home/user");
+    }
+
+    #[test]
+    fn join_avoids_double_slash() {
+        assert_eq!(join_remote("/foo/", "/bar"), "/foo/bar");
+        assert_eq!(join_remote("/foo", "/bar"), "/foo/bar");
+    }
+
+    #[test]
+    fn fatal_error_detection() {
+        assert!(is_fatal_channel_error("connection lost"));
+        assert!(is_fatal_channel_error("Channel closed"));
+        assert!(is_fatal_channel_error("broken pipe"));
+        assert!(is_fatal_channel_error("EOF"));
+        assert!(is_fatal_channel_error("session disconnected"));
+        // Not fatal:
+        assert!(!is_fatal_channel_error("No such file or directory"));
+        assert!(!is_fatal_channel_error("Permission denied"));
+        assert!(!is_fatal_channel_error("Failure"));
+    }
+}
