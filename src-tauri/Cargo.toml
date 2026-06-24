@@ -1,0 +1,45 @@
+[workspace]
+
+[package]
+name = "skyhook"
+version = "0.1.0"
+description = "Modern SFTP client"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.1", features = [] }
+tauri-plugin-dialog = "2.2"
+tauri-plugin-shell = "2.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.41", features = ["full"] }
+russh = "0.46"
+russh-sftp = "2.0"
+russh-keys = "0.46"
+async-trait = "0.1"
+anyhow = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+keyring = "3"
+aes-gcm = "0.10"
+argon2 = "0.5"
+rand = "0.8"
+dirs = "5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
